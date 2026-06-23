@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -155,6 +157,23 @@ func (r *ValkeyClusterReconciler) reconcileCluster(ctx context.Context, cr *cach
 		ReplicasPerShard: int(cr.Spec.ReplicasPerShard),
 	}, observed)
 
+	// Teardown of a departing shard is driven by which StatefulSets still exist,
+	// not by the slot-owning primary count. Once a departing shard's slots have
+	// fully drained, the live primary count already equals the desired shard
+	// count, so topology.Decide stops reporting a scale-in — yet the emptied
+	// StatefulSet still needs deleting. Whenever a StatefulSet with index >=
+	// desired remains, force the scale-in path so scaleIn finishes the job
+	// (drain any residual slots, then forget the nodes and delete the workload).
+	if plan.Kind != topology.ActionForm && plan.Kind != topology.ActionScaleOutShards {
+		excess, err := r.hasExcessShardStatefulSets(ctx, cr)
+		if err != nil {
+			return err
+		}
+		if excess {
+			plan = topology.Plan{Kind: topology.ActionScaleInShards}
+		}
+	}
+
 	switch plan.Kind {
 	case topology.ActionForm:
 		l.Info("forming cluster")
@@ -284,15 +303,40 @@ func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha
 	return r.attachReplicas(ctx, cr, state)
 }
 
-// scaleIn removes shards [desired, oldShards): it drains each departing shard's
-// slots onto a surviving primary with a targeted reshard (deterministic and
-// retry-safe — moving whole slots leaves no open-slot residue), then forgets the
-// shard's nodes and deletes its StatefulSet + PVCs. State is re-read each
-// iteration so the drained slot counts and current roles are always fresh.
-func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, _ cluster.ClusterState, oldShards int) error {
+// scaleIn removes every shard whose index is >= desired: it drains each
+// departing shard's slots onto a surviving primary with the native slot-mover
+// (deterministic and retry-safe — moving whole slots leaves no open-slot
+// residue), then forgets the shard's nodes everywhere and deletes its
+// StatefulSet + PVCs. State is re-read each iteration so drained slot counts and
+// current roles are always fresh.
+//
+// Departing shards are taken from the StatefulSets that actually exist, NOT from
+// a contiguous [desired, count) range. Once an inner shard (say index 3) drains
+// to zero and is deleted while a higher shard (index 4) still owns slots, the
+// live primary count drops to 4 — a count-bounded loop would then only revisit
+// index 3 (already gone) and never touch index 4, wedging the scale-in forever.
+// Keying off the real StatefulSet set makes the drain converge regardless of
+// which shard was removed first.
+func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, _ cluster.ClusterState, _ int) error {
 	seed := r.seed(cr)
 	desired := int(cr.Spec.Shards)
-	for i := desired; i < oldShards; i++ {
+
+	// First, sweep any lingering nodes from already-departed shards. A deleted
+	// shard's pods are gone, but its node entries survive in gossip until every
+	// surviving node forgets them — otherwise go-redis keeps dialing the dead
+	// pods (DNS failures) and the stale entries reappear via gossip.
+	if st, err := r.Admin.State(ctx, seed); err == nil {
+		r.forgetStaleNodes(ctx, cr, st)
+	}
+
+	idxs, err := r.existingShardIndexes(ctx, cr)
+	if err != nil {
+		return err
+	}
+	for _, i := range idxs {
+		if i < desired {
+			continue // surviving shard
+		}
 		st, err := r.Admin.State(ctx, seed)
 		if err != nil {
 			return err
@@ -313,15 +357,20 @@ func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1
 			if c := idx[departID].SlotCount(); c < batch {
 				batch = c
 			}
-			if moved, err := r.Admin.MoveSlots(ctx, seed, departID, survID, batch); err != nil {
+			log.FromContext(ctx).Info("draining shard", "shard", i,
+				"departID", departID, "departSlots", idx[departID].SlotCount(),
+				"survID", survID, "batch", batch)
+			moved, err := r.Admin.MoveSlots(ctx, seed, departID, survID, batch)
+			if err != nil {
 				return fmt.Errorf("drain shard %d (moved %d before error): %w", i, moved, err)
 			}
+			log.FromContext(ctx).Info("drained batch", "shard", i, "moved", moved)
 			return nil
 		}
-		// shard i now owns no slots — forget its nodes and delete workload + PVCs.
+		// shard i now owns no slots — forget its nodes everywhere, then delete workload + PVCs.
 		for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
 			if id, err := r.Admin.MyID(ctx, r.endpoint(cr, i, j)); err == nil && id != "" {
-				_ = r.Admin.Forget(ctx, seed, id)
+				r.forgetEverywhere(ctx, cr, id)
 			}
 		}
 		if err := r.deleteShard(ctx, cr, i); err != nil {
@@ -329,6 +378,97 @@ func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1
 		}
 	}
 	return nil
+}
+
+// hasExcessShardStatefulSets reports whether any shard StatefulSet has an index
+// >= the desired shard count — i.e. a departing shard whose teardown is not yet
+// finished (slots may still be draining, or it may be drained-but-not-deleted).
+func (r *ValkeyClusterReconciler) hasExcessShardStatefulSets(ctx context.Context, cr *cachev1alpha1.ValkeyCluster) (bool, error) {
+	idxs, err := r.existingShardIndexes(ctx, cr)
+	if err != nil {
+		return false, err
+	}
+	desired := int(cr.Spec.Shards)
+	for _, i := range idxs {
+		if i >= desired {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// existingShardIndexes returns the shard indexes that currently have a
+// StatefulSet, sorted ascending. Scale-in keys off this real set rather than a
+// contiguous [desired, count) range (see scaleIn for why).
+func (r *ValkeyClusterReconciler) existingShardIndexes(ctx context.Context, cr *cachev1alpha1.ValkeyCluster) ([]int, error) {
+	list := &appsv1.StatefulSetList{}
+	if err := r.List(ctx, list, client.InNamespace(cr.Namespace),
+		client.MatchingLabels{"app.kubernetes.io/instance": cr.Name}); err != nil {
+		return nil, err
+	}
+	idxs := make([]int, 0, len(list.Items))
+	for i := range list.Items {
+		v, ok := list.Items[i].Labels[resources.LabelShard]
+		if !ok {
+			continue
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			continue
+		}
+		idxs = append(idxs, n)
+	}
+	sort.Ints(idxs)
+	return idxs, nil
+}
+
+// forgetEverywhere removes nodeID from every surviving pod's view. CLUSTER
+// FORGET is per-node with a 60s ban window; issued to only one node, gossip
+// re-introduces the entry from the others. Issuing it from every desired
+// (surviving) pod keeps the node forgotten cluster-wide. Errors are ignored:
+// forgetting an unknown node, or a node forgetting itself, is a harmless no-op.
+func (r *ValkeyClusterReconciler) forgetEverywhere(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, nodeID string) {
+	for _, ep := range r.allEndpoints(cr) {
+		_ = r.Admin.Forget(ctx, ep, nodeID)
+	}
+}
+
+// forgetStaleNodes forgets, from every surviving pod, any cluster node whose pod
+// no longer exists — i.e. the nodes of an already-deleted shard's StatefulSet.
+//
+// "Stale" is keyed off the StatefulSets that actually exist, NOT off the desired
+// topology. During scale-in a departing shard (index >= desired) still has its
+// StatefulSet and pods while its slots drain; those nodes must NOT be forgotten
+// mid-drain — doing so drops the departing primary from the seed's view, the
+// drain loop then sees it owning zero slots and stalls, and gossip re-introduces
+// it moments later. Only once a shard's StatefulSet is deleted are its nodes
+// genuinely stale.
+func (r *ValkeyClusterReconciler) forgetStaleNodes(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, state cluster.ClusterState) {
+	want, err := r.existingPodHosts(ctx, cr)
+	if err != nil {
+		return // best-effort; a transient list error just defers the sweep
+	}
+	for _, n := range state.Nodes {
+		if n.Host != "" && !want[n.Host] {
+			r.forgetEverywhere(ctx, cr, n.ID)
+		}
+	}
+}
+
+// existingPodHosts returns the FQDN set of every pod across all StatefulSets that
+// currently exist (any shard index, surviving or pending drain).
+func (r *ValkeyClusterReconciler) existingPodHosts(ctx context.Context, cr *cachev1alpha1.ValkeyCluster) (map[string]bool, error) {
+	idxs, err := r.existingShardIndexes(ctx, cr)
+	if err != nil {
+		return nil, err
+	}
+	want := map[string]bool{}
+	for _, i := range idxs {
+		for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
+			want[resources.PodFQDN(cr, i, j)] = true
+		}
+	}
+	return want, nil
 }
 
 // firstSurvivorPrimary returns the node ID of a primary in a surviving shard
@@ -401,7 +541,6 @@ func (r *ValkeyClusterReconciler) reconcileMembership(ctx context.Context, cr *c
 		want[ep.Host] = true
 	}
 	byHost := hostIndex(state)
-	// meet any desired pod not yet in the view
 	for _, ep := range r.allEndpoints(cr) {
 		if _, ok := byHost[ep.Host]; !ok {
 			if err := r.Admin.Meet(ctx, seed, ep); err != nil {
@@ -412,12 +551,9 @@ func (r *ValkeyClusterReconciler) reconcileMembership(ctx context.Context, cr *c
 	if err := r.attachReplicas(ctx, cr, state); err != nil {
 		return err
 	}
-	// forget nodes that are no longer part of the desired topology
-	for _, n := range state.Nodes {
-		if !want[n.Host] && n.Host != "" {
-			_ = r.Admin.Forget(ctx, seed, n.ID)
-		}
-	}
+	// forget nodes that are no longer part of the desired topology — from every
+	// survivor, so gossip cannot re-introduce them (CLUSTER FORGET is per-node).
+	r.forgetStaleNodes(ctx, cr, state)
 	return nil
 }
 
