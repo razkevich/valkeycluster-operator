@@ -56,25 +56,45 @@ func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha
 			return err
 		}
 	}
-	// 2. move each new primary its fair share, targeted by node ID
-	state, err := r.Admin.State(ctx, seed)
-	if err != nil {
-		return err
-	}
-	idx := byID(state)
+	// 2. Move each new primary its fair share with the native slot-mover, pulling
+	// from the fattest primary first. This is deterministic where valkey-cli
+	// reshard is not: `--cluster-from all` refuses (exit 1) on an uneven or
+	// interrupted distribution — e.g. after the desired topology is changed
+	// mid-reshard — which would wedge scale-out. MoveSlots never refuses, so the
+	// cluster converges from any starting distribution.
 	for i := oldShards; i < desired; i++ {
 		id, err := r.Admin.MyID(ctx, r.endpoint(cr, i, 0))
 		if err != nil || id == "" {
 			return fmt.Errorf("resolve new primary %d id: %w", i, err)
 		}
-		have := 0
-		if n, ok := idx[id]; ok {
-			have = n.SlotCount()
+		state, err := r.Admin.State(ctx, seed)
+		if err != nil {
+			return err
 		}
-		if need := perShard - have; need > 0 {
-			if err := r.Admin.Reshard(ctx, seed, "", id, need); err != nil {
-				return fmt.Errorf("reshard into shard %d: %w", i, err)
+		idx := byID(state)
+		need := perShard - idx[id].SlotCount()
+		for need > 0 {
+			srcID, srcSlots := fattestPrimary(idx, id)
+			if srcID == "" || srcSlots == 0 {
+				break // no source has slots to give
 			}
+			take := need
+			if take > srcSlots {
+				take = srcSlots
+			}
+			moved, err := r.Admin.MoveSlots(ctx, seed, srcID, id, take)
+			if err != nil {
+				return fmt.Errorf("fill shard %d: %w", i, err)
+			}
+			if moved == 0 {
+				break
+			}
+			need -= moved
+			state, err = r.Admin.State(ctx, seed)
+			if err != nil {
+				return err
+			}
+			idx = byID(state)
 		}
 	}
 	// 3. join and attach the new shards' replicas (now that slots are placed)
@@ -85,11 +105,26 @@ func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha
 			}
 		}
 	}
-	state, err = r.Admin.State(ctx, seed)
+	state, err := r.Admin.State(ctx, seed)
 	if err != nil {
 		return err
 	}
 	return r.attachReplicas(ctx, cr, state)
+}
+
+// fattestPrimary returns the slot-owning primary with the most slots, excluding
+// excludeID — the source scale-out pulls from when filling a new primary.
+func fattestPrimary(idx map[string]cluster.NodeInfo, excludeID string) (string, int) {
+	bestID, best := "", 0
+	for id, n := range idx {
+		if id == excludeID || !n.IsPrimary() {
+			continue
+		}
+		if c := n.SlotCount(); c > best {
+			bestID, best = id, c
+		}
+	}
+	return bestID, best
 }
 
 // scaleIn removes every shard whose index is >= desired: it drains each
