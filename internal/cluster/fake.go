@@ -239,6 +239,10 @@ func countToRanges(count int) []SlotRange {
 	return []SlotRange{{Start: 0, End: count - 1}}
 }
 
+// RepairSlots is a no-op for the fake: it moves slots atomically, so it never
+// produces open/mid-migration slots.
+func (f *Fake) RepairSlots(_ context.Context, _ Endpoint) (int, error) { return 0, nil }
+
 // Fix ensures full coverage by rebalancing across current primaries.
 func (f *Fake) Fix(ctx context.Context, seed Endpoint) error {
 	return f.Rebalance(ctx, seed, RebalanceOpts{})

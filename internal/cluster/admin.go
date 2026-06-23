@@ -49,8 +49,13 @@ func (e Endpoint) Addr() string { return fmt.Sprintf("%s:%d", e.Host, e.Port) }
 
 // NodeInfo is one node's view as parsed from CLUSTER NODES.
 type NodeInfo struct {
-	ID        string
-	Host      string
+	ID string
+	// Host is the address to advertise/use for dialing (announced hostname when
+	// present, otherwise the IP).
+	Host string
+	// IP is the raw node IP, used as the MIGRATE target (more reliable than a
+	// hostname for direct data transfer).
+	IP        string
 	Port      int
 	Flags     []string
 	MasterID  string // "" when this node is a primary
@@ -146,4 +151,10 @@ type ClusterAdmin interface {
 	Reshard(ctx context.Context, seed Endpoint, fromNodeID, toNodeID string, n int) error
 	// Fix repairs open/partially-migrated slots via valkey-cli --cluster fix.
 	Fix(ctx context.Context, seed Endpoint) error
+	// RepairSlots deterministically finalizes any open (importing/migrating) slots:
+	// for each, it migrates stray keys to the slot's bitmap owner and asserts
+	// ownership on every node. Unlike `valkey-cli --cluster fix`, it handles
+	// multi-way open slots (several nodes importing/migrating the same slot), which
+	// arise when reshards are interrupted/retried. Returns the number of slots repaired.
+	RepairSlots(ctx context.Context, seed Endpoint) (int, error)
 }

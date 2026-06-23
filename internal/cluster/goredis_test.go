@@ -50,13 +50,28 @@ func TestHasOpenSlots(t *testing.T) {
 	}
 }
 
-func TestParseAddrPrefersHostname(t *testing.T) {
-	host, port := parseAddr("10.0.0.1:6379@16379,demo-shard-0-0.demo-nodes.ns.svc")
-	if host != "demo-shard-0-0.demo-nodes.ns.svc" || port != 6379 {
-		t.Fatalf("parseAddr = %s:%d", host, port)
+func TestParseAddr(t *testing.T) {
+	ip, port, hostname := parseAddr("10.0.0.1:6379@16379,demo-shard-0-0.demo-nodes.ns.svc")
+	if ip != "10.0.0.1" || port != 6379 || hostname != "demo-shard-0-0.demo-nodes.ns.svc" {
+		t.Fatalf("parseAddr = %s:%d host=%s", ip, port, hostname)
 	}
-	host, port = parseAddr("10.0.0.1:6379@16379")
-	if host != "10.0.0.1" || port != 6379 {
-		t.Fatalf("parseAddr(no hostname) = %s:%d", host, port)
+	ip, port, hostname = parseAddr("10.0.0.1:6379@16379")
+	if ip != "10.0.0.1" || port != 6379 || hostname != "" {
+		t.Fatalf("parseAddr(no hostname) = %s:%d host=%s", ip, port, hostname)
+	}
+}
+
+func TestParseOpenSlots(t *testing.T) {
+	raw := strings.Join([]string{
+		"a1 10.0.0.1:6379@16379 master - 0 0 1 connected 0-780 [781->-b2] [900-<-c3]",
+		"b2 10.0.0.2:6379@16379 master - 0 0 2 connected 782-16383",
+	}, "\n")
+	got := parseOpenSlots(raw)
+	if len(got) != 2 {
+		t.Fatalf("parseOpenSlots = %v, want 2 slots (781, 900)", got)
+	}
+	m := map[int]bool{got[0]: true, got[1]: true}
+	if !m[781] || !m[900] {
+		t.Fatalf("parseOpenSlots = %v, want {781,900}", got)
 	}
 }

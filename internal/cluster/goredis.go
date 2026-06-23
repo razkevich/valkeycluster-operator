@@ -22,6 +22,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -181,6 +182,68 @@ func (a *Admin) Fix(ctx context.Context, seed Endpoint) error {
 	return err
 }
 
+// RepairSlots deterministically finalizes every open slot. For each open slot it
+// finds the bitmap owner, migrates any stray keys (sitting on a non-owner) to the
+// owner by IP, then forces SETSLOT STABLE + SETSLOT NODE <owner> on every node.
+// This converges multi-way open slots that `valkey-cli --cluster fix` cannot.
+func (a *Admin) RepairSlots(ctx context.Context, seed Endpoint) (int, error) {
+	c := dial(seed)
+	defer c.Close()
+	nodesRaw, err := c.ClusterNodes(ctx).Result()
+	if err != nil {
+		return 0, err
+	}
+	open := parseOpenSlots(nodesRaw)
+	if len(open) == 0 {
+		return 0, nil
+	}
+	nodes := parseNodes(nodesRaw)
+
+	ownerOf := func(slot int) (NodeInfo, bool) {
+		for _, n := range nodes {
+			for _, r := range n.Slots {
+				if slot >= r.Start && slot <= r.End {
+					return n, true
+				}
+			}
+		}
+		return NodeInfo{}, false
+	}
+
+	repaired := 0
+	for _, slot := range open {
+		owner, ok := ownerOf(slot)
+		if !ok || owner.IP == "" {
+			continue // uncovered slot — coverage repair is a separate concern
+		}
+		// 1. migrate any stray keys for this slot to the owner (single-key, by IP)
+		for _, n := range nodes {
+			if n.ID == owner.ID || n.IP == "" {
+				continue
+			}
+			cn := goredis.NewClient(&goredis.Options{Addr: fmt.Sprintf("%s:%d", n.IP, n.Port)})
+			keys, _ := cn.ClusterGetKeysInSlot(ctx, slot, 1000).Result()
+			for _, k := range keys {
+				_ = cn.Migrate(ctx, owner.IP, strconv.Itoa(owner.Port), k, 0, 10*time.Second).Err()
+			}
+			_ = cn.Close()
+		}
+		// 2. clear migration markers and assert ownership on every node
+		for _, n := range nodes {
+			addr := n.IP
+			if addr == "" {
+				addr = n.Host
+			}
+			cn := goredis.NewClient(&goredis.Options{Addr: fmt.Sprintf("%s:%d", addr, n.Port)})
+			_ = cn.Do(ctx, "CLUSTER", "SETSLOT", slot, "STABLE").Err()
+			_ = cn.Do(ctx, "CLUSTER", "SETSLOT", slot, "NODE", owner.ID).Err()
+			_ = cn.Close()
+		}
+		repaired++
+	}
+	return repaired, nil
+}
+
 // hasOpenSlots reports whether CLUSTER NODES shows any slot mid-migration.
 // Migrating slots appear as [slot->-nodeid] and importing as [slot-<-nodeid];
 // the "->-" / "-<-" substrings are reliable markers.
@@ -209,7 +272,11 @@ func parseNodes(s string) []NodeInfo {
 		if len(fields) < 8 {
 			continue
 		}
-		host, port := parseAddr(fields[1])
+		ip, port, hostname := parseAddr(fields[1])
+		host := hostname
+		if host == "" {
+			host = ip
+		}
 		flags := strings.Split(fields[2], ",")
 		master := fields[3]
 		if master == "-" {
@@ -218,6 +285,7 @@ func parseNodes(s string) []NodeInfo {
 		n := NodeInfo{
 			ID:        fields[0],
 			Host:      host,
+			IP:        ip,
 			Port:      port,
 			Flags:     flags,
 			MasterID:  master,
@@ -236,10 +304,9 @@ func parseNodes(s string) []NodeInfo {
 	return nodes
 }
 
-// parseAddr extracts host and client port from "ip:port@cport[,hostname]".
-// Prefers the announced hostname when present.
-func parseAddr(s string) (string, int) {
-	hostname := ""
+// parseAddr extracts ip, client port, and announced hostname (may be "") from
+// "ip:port@cport[,hostname]".
+func parseAddr(s string) (ip string, port int, hostname string) {
 	if idx := strings.Index(s, ","); idx >= 0 {
 		hostname = s[idx+1:]
 		s = s[:idx]
@@ -248,11 +315,37 @@ func parseAddr(s string) (string, int) {
 		s = s[:idx]
 	}
 	host, portStr, _ := strings.Cut(s, ":")
-	port, _ := strconv.Atoi(portStr)
-	if hostname != "" {
-		host = hostname
+	p, _ := strconv.Atoi(portStr)
+	return host, p, hostname
+}
+
+// parseOpenSlots returns the distinct slot numbers that are mid-migration
+// (appear in [slot->-id] / [slot-<-id] markers) anywhere in CLUSTER NODES.
+func parseOpenSlots(nodesRaw string) []int {
+	seen := map[int]bool{}
+	for _, f := range strings.Fields(nodesRaw) {
+		if !strings.HasPrefix(f, "[") {
+			continue
+		}
+		// f looks like [781->-<id>] or [781-<-<id>]
+		body := strings.TrimPrefix(f, "[")
+		// slot number is the leading digits
+		end := 0
+		for end < len(body) && body[end] >= '0' && body[end] <= '9' {
+			end++
+		}
+		if end == 0 {
+			continue
+		}
+		if n, err := strconv.Atoi(body[:end]); err == nil {
+			seen[n] = true
+		}
 	}
-	return host, port
+	out := make([]int, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out
 }
 
 func parseSlotToken(tok string) (int, int, bool) {

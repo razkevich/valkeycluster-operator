@@ -163,14 +163,16 @@ func (r *ValkeyClusterReconciler) reconcileCluster(ctx context.Context, cr *cach
 			return err
 		}
 	case topology.ActionRepair:
-		l.Info("repairing open slots before proceeding")
 		_ = r.setPhase(ctx, cr, cachev1alpha1.PhaseResharding, "Repairing", "fixing open slots")
-		// Best-effort: `valkey-cli --cluster fix` resolves the open slot but may
-		// exit non-zero on a transient MIGRATE IOERR even though it made progress.
-		// Don't fail the reconcile — re-observe on the next pass and converge. One
-		// fix attempt per reconcile (paced by requeue) avoids hammering the cluster.
-		if err := r.Admin.Fix(ctx, seed); err != nil {
-			l.Info("cluster fix reported an error (will re-check next reconcile)", "err", err.Error())
+		// Deterministic, multi-way-safe slot finalization (see ClusterAdmin.RepairSlots).
+		// We do NOT use `valkey-cli --cluster fix`: it can't untangle a slot that
+		// several nodes are importing/migrating at once (which interrupted reshards
+		// produce), so it would loop forever.
+		n, err := r.Admin.RepairSlots(ctx, seed)
+		if err != nil {
+			l.Info("repair-slots reported an error (will re-check next reconcile)", "err", err.Error())
+		} else {
+			l.Info("repaired open slots", "count", n)
 		}
 	case topology.ActionScaleOutShards:
 		l.Info("scaling out shards", "add", plan.AddShards)
