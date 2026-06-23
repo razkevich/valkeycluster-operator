@@ -110,6 +110,15 @@ func RenderValkeyConf(cr *cachev1alpha1.ValkeyCluster) string {
 	fmt.Fprintf(&b, "min-replicas-to-write %d\n", hp.MinReplicasToWrite)
 	fmt.Fprintf(&b, "dir %s\n", dataMount)
 	fmt.Fprintf(&b, "save \"\"\n")
+	// Keep maxmemory below the container memory limit so RDB/AOF copy-on-write
+	// forks and client/replication buffers don't trigger an OOMKill. We reserve
+	// ~30% headroom. Datastore-safe policy (reject writes rather than silently
+	// evict) when at the cap.
+	if lim, ok := cr.Spec.Resources.Limits[corev1.ResourceMemory]; ok && !lim.IsZero() {
+		maxBytes := lim.Value() * 70 / 100
+		fmt.Fprintf(&b, "maxmemory %d\n", maxBytes)
+		fmt.Fprintf(&b, "maxmemory-policy noeviction\n")
+	}
 	return b.String()
 }
 

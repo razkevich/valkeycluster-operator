@@ -117,6 +117,25 @@ func TestRenderValkeyConf(t *testing.T) {
 	}
 }
 
+func TestRenderValkeyConfMaxMemory(t *testing.T) {
+	cr := testCR()
+	cr.Spec.Resources.Limits = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")}
+	conf := RenderValkeyConf(cr)
+	// 70% of 2Gi (2147483648) = 1503238553
+	if !strings.Contains(conf, "maxmemory 1503238553") {
+		t.Errorf("maxmemory not set to 70%% of limit\n---\n%s", conf)
+	}
+	if !strings.Contains(conf, "maxmemory-policy noeviction") {
+		t.Errorf("maxmemory-policy not set\n---\n%s", conf)
+	}
+}
+
+func TestRenderValkeyConfNoMaxMemoryWithoutLimit(t *testing.T) {
+	if strings.Contains(RenderValkeyConf(testCR()), "maxmemory ") {
+		t.Error("maxmemory should not be set when no memory limit is given")
+	}
+}
+
 func TestRenderValkeyConfDefaults(t *testing.T) {
 	// zero-value HAPolicy should still render sane defaults
 	conf := RenderValkeyConf(testCR())
