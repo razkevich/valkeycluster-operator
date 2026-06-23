@@ -64,7 +64,7 @@ Make targets of note: `make run` (run the controller locally), `make test` (unit
 
 ```mermaid
 flowchart LR
-  CR["ValkeyCluster CR<br/>shards x replicasPerShard"] -->|"desired state (watched)"| OP["valkeycluster<br/>operator"]
+  CR["ValkeyCluster CR<br/>shards x replicasPerShard"] -->|watches| OP["valkeycluster<br/>operator"]
   OP -->|owns| CM["ConfigMap<br/>valkey.conf"]
   OP -->|owns| SVC["Headless Service<br/>stable per-pod DNS"]
   OP -->|owns| STS["StatefulSet per shard<br/>shard-0 ... shard-N"]
