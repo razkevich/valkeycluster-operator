@@ -220,31 +220,52 @@ func (r *ValkeyClusterReconciler) formCluster(ctx context.Context, cr *cachev1al
 	return r.attachReplicas(ctx, cr, state)
 }
 
-// scaleOut joins only each new shard's primary (ordinal 0) as an empty master,
-// rebalances slots onto exactly those new primaries, then joins and attaches the
-// new shards' replicas. Joining replicas before the rebalance would let
-// --cluster-use-empty-masters hand them slots too, creating spurious primaries.
+// scaleOut joins each new shard's primary (ordinal 0), moves that primary its
+// fair share of slots with a *targeted* reshard (never --use-empty-masters, which
+// would also hand slots to replica pods that are momentarily empty masters), then
+// joins and attaches the new shards' replicas. Idempotent: a primary that already
+// holds its share is skipped, so a retry never over-assigns.
 func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, oldShards int) error {
 	seed := r.seed(cr)
-	// 1. join new primaries only
-	for i := oldShards; i < int(cr.Spec.Shards); i++ {
+	desired := int(cr.Spec.Shards)
+	perShard := cluster.TotalSlots / desired
+
+	// 1. join only the new primaries
+	for i := oldShards; i < desired; i++ {
 		if err := r.Admin.Meet(ctx, seed, r.endpoint(cr, i, 0)); err != nil {
 			return err
 		}
 	}
-	// 2. rebalance slots onto the new empty primaries
-	if err := r.Admin.Rebalance(ctx, seed, cluster.RebalanceOpts{UseEmptyMasters: true}); err != nil {
-		return fmt.Errorf("rebalance (scale out): %w", err)
+	// 2. move each new primary its fair share, targeted by node ID
+	state, err := r.Admin.State(ctx, seed)
+	if err != nil {
+		return err
 	}
-	// 3. join the new shards' replicas (now that slots are placed) and attach them
-	for i := oldShards; i < int(cr.Spec.Shards); i++ {
+	idx := byID(state)
+	for i := oldShards; i < desired; i++ {
+		id, err := r.Admin.MyID(ctx, r.endpoint(cr, i, 0))
+		if err != nil || id == "" {
+			return fmt.Errorf("resolve new primary %d id: %w", i, err)
+		}
+		have := 0
+		if n, ok := idx[id]; ok {
+			have = n.SlotCount()
+		}
+		if need := perShard - have; need > 0 {
+			if err := r.Admin.Reshard(ctx, seed, id, need); err != nil {
+				return fmt.Errorf("reshard into shard %d: %w", i, err)
+			}
+		}
+	}
+	// 3. join and attach the new shards' replicas (now that slots are placed)
+	for i := oldShards; i < desired; i++ {
 		for j := 1; j <= int(cr.Spec.ReplicasPerShard); j++ {
 			if err := r.Admin.Meet(ctx, seed, r.endpoint(cr, i, j)); err != nil {
 				return err
 			}
 		}
 	}
-	state, err := r.Admin.State(ctx, seed)
+	state, err = r.Admin.State(ctx, seed)
 	if err != nil {
 		return err
 	}

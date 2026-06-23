@@ -134,6 +134,11 @@ type ClusterAdmin interface {
 
 	// Rebalance migrates slots (and their keys) via valkey-cli --cluster rebalance.
 	Rebalance(ctx context.Context, seed Endpoint, opts RebalanceOpts) error
+	// Reshard moves exactly n slots (and their keys) from all other primaries to
+	// the primary identified by toNodeID, via valkey-cli --cluster reshard. Unlike
+	// Rebalance(UseEmptyMasters), it targets a specific node and never hands slots
+	// to empty masters that are meant to become replicas.
+	Reshard(ctx context.Context, seed Endpoint, toNodeID string, n int) error
 	// Fix repairs open/partially-migrated slots via valkey-cli --cluster fix.
 	Fix(ctx context.Context, seed Endpoint) error
 }

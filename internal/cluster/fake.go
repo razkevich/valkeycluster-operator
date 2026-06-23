@@ -179,6 +179,37 @@ func (f *Fake) Rebalance(_ context.Context, _ Endpoint, opts RebalanceOpts) erro
 	return nil
 }
 
+// Reshard (fake) makes toNodeID a slot-owning primary and re-splits the keyspace
+// evenly across all slot-owning primaries (the fake ignores the exact count n).
+func (f *Fake) Reshard(_ context.Context, _ Endpoint, toNodeID string, _ int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n, ok := f.nodes[toNodeID]; ok {
+		n.MasterID = ""
+		n.Flags = []string{"master"}
+		if n.SlotCount() == 0 {
+			n.Slots = []SlotRange{{Start: 0, End: 0}} // mark as owning, re-split below
+		}
+	}
+	owners := []string{}
+	for id, n := range f.nodes {
+		if n.IsPrimary() && n.SlotCount() > 0 {
+			owners = append(owners, id)
+		}
+	}
+	sort.Strings(owners)
+	for _, n := range f.nodes {
+		if n.IsPrimary() {
+			n.Slots = nil
+		}
+	}
+	k := len(owners)
+	for i, id := range owners {
+		f.nodes[id].Slots = []SlotRange{{Start: i * TotalSlots / k, End: (i+1)*TotalSlots/k - 1}}
+	}
+	return nil
+}
+
 // Fix ensures full coverage by rebalancing across current primaries.
 func (f *Fake) Fix(ctx context.Context, seed Endpoint) error {
 	return f.Rebalance(ctx, seed, RebalanceOpts{})

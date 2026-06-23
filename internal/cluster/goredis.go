@@ -149,6 +149,20 @@ func (a *Admin) Rebalance(ctx context.Context, seed Endpoint, opts RebalanceOpts
 	return err
 }
 
+// Reshard moves n slots from all other primaries to toNodeID.
+func (a *Admin) Reshard(ctx context.Context, seed Endpoint, toNodeID string, n int) error {
+	if n <= 0 {
+		return nil
+	}
+	args := []string{
+		"valkey-cli", "--cluster", "reshard", fmt.Sprintf("127.0.0.1:%d", seed.Port),
+		"--cluster-from", "all", "--cluster-to", toNodeID,
+		"--cluster-slots", strconv.Itoa(n), "--cluster-yes",
+	}
+	_, err := a.exec.Exec(ctx, seed.Namespace, seed.PodName, a.container, args)
+	return err
+}
+
 // Fix runs `valkey-cli --cluster fix` inside the seed pod to repair open slots.
 func (a *Admin) Fix(ctx context.Context, seed Endpoint) error {
 	args := []string{"valkey-cli", "--cluster", "fix", fmt.Sprintf("127.0.0.1:%d", seed.Port), "--cluster-yes"}
