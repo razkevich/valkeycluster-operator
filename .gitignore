@@ -28,3 +28,6 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+# Local agent credentials/settings (keep skills & commands tracked)
+.claude/settings.local.json
