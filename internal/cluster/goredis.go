@@ -137,9 +137,15 @@ func (a *Admin) Failover(ctx context.Context, replica Endpoint) error {
 	return c.ClusterFailover(ctx).Err()
 }
 
+// migrateTimeoutMillis caps each MIGRATE during reshard/rebalance/fix. Legit
+// MIGRATEs of small values complete in milliseconds, so a low cap turns an
+// occasional stalled transfer into a fast failure that the reconcile retries,
+// instead of a 60s (default) wedge that aborts the whole operation.
+const migrateTimeoutMillis = "10000"
+
 // Rebalance runs `valkey-cli --cluster rebalance` inside the seed pod.
 func (a *Admin) Rebalance(ctx context.Context, seed Endpoint, opts RebalanceOpts) error {
-	args := []string{"valkey-cli", "--cluster", "rebalance", fmt.Sprintf("127.0.0.1:%d", seed.Port), "--cluster-yes"}
+	args := []string{"valkey-cli", "--cluster", "rebalance", fmt.Sprintf("127.0.0.1:%d", seed.Port), "--cluster-yes", "--cluster-timeout", migrateTimeoutMillis}
 	if opts.UseEmptyMasters {
 		args = append(args, "--cluster-use-empty-masters")
 	}
@@ -162,7 +168,7 @@ func (a *Admin) Reshard(ctx context.Context, seed Endpoint, fromNodeID, toNodeID
 	args := []string{
 		"valkey-cli", "--cluster", "reshard", fmt.Sprintf("127.0.0.1:%d", seed.Port),
 		"--cluster-from", from, "--cluster-to", toNodeID,
-		"--cluster-slots", strconv.Itoa(n), "--cluster-yes",
+		"--cluster-slots", strconv.Itoa(n), "--cluster-yes", "--cluster-timeout", migrateTimeoutMillis,
 	}
 	_, err := a.exec.Exec(ctx, seed.Namespace, seed.PodName, a.container, args)
 	return err
@@ -170,7 +176,7 @@ func (a *Admin) Reshard(ctx context.Context, seed Endpoint, fromNodeID, toNodeID
 
 // Fix runs `valkey-cli --cluster fix` inside the seed pod to repair open slots.
 func (a *Admin) Fix(ctx context.Context, seed Endpoint) error {
-	args := []string{"valkey-cli", "--cluster", "fix", fmt.Sprintf("127.0.0.1:%d", seed.Port), "--cluster-yes"}
+	args := []string{"valkey-cli", "--cluster", "fix", fmt.Sprintf("127.0.0.1:%d", seed.Port), "--cluster-yes", "--cluster-timeout", migrateTimeoutMillis}
 	_, err := a.exec.Exec(ctx, seed.Namespace, seed.PodName, a.container, args)
 	return err
 }

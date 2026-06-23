@@ -39,6 +39,12 @@ import (
 
 const clientPort = 6379
 
+// drainBatchSlots bounds how many slots a single scale-in drain moves per
+// reconcile. Smaller batches commit progress incrementally and keep any single
+// reshard short, so a transient MIGRATE stall costs a small retry rather than
+// aborting a large drain.
+const drainBatchSlots = 256
+
 // ---- endpoints ----
 
 func (r *ValkeyClusterReconciler) endpoint(cr *cachev1alpha1.ValkeyCluster, shard, ordinal int) cluster.Endpoint {
@@ -297,11 +303,21 @@ func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1
 			if survID == "" {
 				return fmt.Errorf("no surviving primary to drain shard %d into", i)
 			}
-			if err := r.Admin.Reshard(ctx, seed, departID, survID, idx[departID].SlotCount()); err != nil {
-				return fmt.Errorf("drain shard %d: %w", i, err)
+			// Drain in a bounded batch rather than one huge reshard: each batch
+			// commits real progress, so a transient MIGRATE stall costs only a
+			// small retry instead of aborting the whole drain. Return after one
+			// batch so the next reconcile re-reads fresh state and continues; the
+			// shard isn't deleted until it owns 0 slots.
+			batch := drainBatchSlots
+			if c := idx[departID].SlotCount(); c < batch {
+				batch = c
 			}
+			if err := r.Admin.Reshard(ctx, seed, departID, survID, batch); err != nil {
+				return fmt.Errorf("drain shard %d (batch): %w", i, err)
+			}
+			return nil
 		}
-		// forget every node of the departing shard, then delete its workload + PVCs.
+		// shard i now owns no slots — forget its nodes and delete workload + PVCs.
 		for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
 			if id, err := r.Admin.MyID(ctx, r.endpoint(cr, i, j)); err == nil && id != "" {
 				_ = r.Admin.Forget(ctx, seed, id)
