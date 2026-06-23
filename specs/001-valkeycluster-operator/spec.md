@@ -109,7 +109,7 @@ A user's needs change and they edit the topology — most importantly the number
 **Reconciliation, status & lifecycle**
 - **FR-017**: The system MUST continuously reconcile actual cluster state toward the declared topology, repairing drift (e.g., recreating resources deleted out of band, reassigning unserved keyspace).
 - **FR-018**: The system MUST be resilient to its own restarts: after an interruption during forming or resharding, it MUST converge to the declared topology with no manual intervention and no data loss.
-- **FR-019**: The system MUST report a truthful status derived from the live cluster, including an overall phase (e.g., `Provisioning`, `Forming`, `Resharding`, `Ready`, `Degraded`, `Failed`), per-shard primary identity and served keyspace, ready replica counts, and standard conditions (`Available`, `Progressing`, `Degraded`).
+- **FR-019**: The system MUST report a truthful status derived from the live cluster, including an overall phase (e.g., `Provisioning`, `Forming`, `Resharding`, `Ready`, `Degraded`, `Failed`), per-shard primary identity and served keyspace, ready replica counts, and standard conditions (`Available`, `Progressing`, `Degraded`). This status MUST be the monitoring interface, surfaced through `kubectl` — at-a-glance summary columns on `get` and full detail on `describe` — with no separate metrics system or UI required.
 - **FR-020**: Deleting a `ValkeyCluster` MUST remove all resources the operator created for it (nodes, storage, supporting objects).
 
 **Verification (test suite & benchmark)**
@@ -156,3 +156,4 @@ A user's needs change and they edit the topology — most importantly the number
 - Sentinel-based (non-cluster) deployments and proxy topologies.
 - External / cross-cluster access and non-cluster-aware client compatibility.
 - Multi-namespace or multi-cluster (federated) management.
+- Metrics/Prometheus/Grafana integration, custom dashboards, and any bespoke web UI — monitoring is via `kubectl` only (status, conditions, summary columns).
