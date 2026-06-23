@@ -70,7 +70,8 @@ A user's needs change and they edit the topology — most importantly the number
 
 - **Invalid shard count**: A topology of `shards: 2` is rejected at admission (cluster failover voting needs a primary majority; meaningful values are `1` for HA-only or `≥3` for sharding).
 - **Operator restart mid-operation**: If the operator crashes during forming or resharding, on restart it detects the partial state and drives the cluster to the declared topology with no manual repair and no data loss.
-- **Node reschedule / address change**: When a pod is rescheduled (new network address), it rejoins the cluster under its original identity using its persisted state.
+- **Node reschedule / address change**: When a pod is rescheduled (new network address), it rejoins the cluster under its original identity using its persisted state, and other nodes and clients continue to reach it via its stable advertised address.
+- **Lost / empty storage**: If a node's persistent storage is lost and recreated empty (stale identity gone), the operator MUST detect this, drop the stale identity from the cluster, and rejoin the node fresh — rather than letting an empty node corrupt the slot map.
 - **All copies of a shard lost simultaneously**: The resource reports `Degraded`/`Failed` for that shard and surfaces that the affected portion of the keyspace is unavailable, rather than silently appearing healthy.
 - **Immutable storage size**: An attempt to change `storage.size` after creation is rejected (volume resizing is out of scope).
 - **Out-of-band drift**: If a node/workload the operator created is deleted out of band, the operator recreates it and re-forms the cluster.
@@ -90,10 +91,10 @@ A user's needs change and they edit the topology — most importantly the number
 - **FR-006**: On creation, the system MUST provision `shards × (1 + replicasPerShard)` nodes and form them into a single Valkey cluster.
 - **FR-007**: The system MUST partition the entire keyspace (all hash slots) across the shards so that, when `Ready`, 100% of the keyspace is served.
 - **FR-008**: The system MUST attach each shard's replicas to that shard's primary so they hold copies of the shard's data.
-- **FR-009**: The system MUST provide stable in-cluster network identities and discovery endpoints so cluster-aware clients can reach all nodes.
+- **FR-009**: Each node MUST have a stable in-cluster network identity that survives pod restarts and address (IP) changes, and the node MUST advertise that stable address for both cluster gossip — **including the cluster bus channel** — and client redirects. Cluster membership and client routing MUST continue to work after any node's underlying address changes. The system MUST also expose a discovery endpoint that cluster-aware clients can use to reach the cluster.
 
 **Persistence**
-- **FR-010**: Each node's data MUST be persisted to durable storage so that data survives node restarts and reschedules.
+- **FR-010**: Each node's data AND its cluster membership identity (its node identity and view of the cluster) MUST be persisted to durable storage, so that a restarted or rescheduled node keeps its identity and rejoins the *existing* cluster rather than appearing as a new, duplicate node — with no data loss.
 
 **High availability & failover**
 - **FR-011**: When a shard's primary is lost and that shard has at least one replica, the system MUST result in automatic promotion of a replica so the shard's keyspace keeps serving without operator intervention.
@@ -101,7 +102,7 @@ A user's needs change and they edit the topology — most importantly the number
 
 **Resharding & scaling**
 - **FR-013**: When `shards` changes, the system MUST reconcile the cluster to the new shard count and **redistribute the keyspace such that all previously stored data is preserved**.
-- **FR-014**: When scaling shards down, the system MUST migrate the keyspace off departing shards onto remaining shards before removing them.
+- **FR-014**: When scaling shards down, the system MUST migrate the keyspace off departing shards onto remaining shards before removing them, and MUST hand off any primary role to a healthy replica before removing a node that is currently a primary, so that no acknowledged writes are lost.
 - **FR-015**: When `replicasPerShard` changes, the system MUST add or remove HA copies per shard without redistributing the keyspace.
 - **FR-016**: The system MAY make affected portions of the keyspace briefly unavailable during a topology change (disruptive topology changes are acceptable; zero-downtime resharding is not required).
 
@@ -115,6 +116,10 @@ A user's needs change and they edit the topology — most importantly the number
 - **FR-021**: The project MUST include an automated test suite that verifies provisioning, failover, and data-preserving resharding (the three user stories) as day-two operations.
 - **FR-022**: The project MUST include a repeatable benchmark that measures cluster performance and demonstrates the clustering/HA trade-offs (at minimum: write throughput as a function of shard count, and the availability/latency impact of a failover).
 - **FR-023**: The project MUST include documentation for day-two operations (scaling/resharding, observing failover, reading status) and a discussion of the clustering vs. HA performance trade-offs.
+
+**Membership safety (working-cluster essentials)**
+- **FR-024**: When a node is removed (shard scale-down or replica reduction), the system MUST remove it from cluster membership and reclaim its persistent storage, so that stale identity/membership state cannot later resurrect and corrupt the cluster if a like-named node is created afterward.
+- **FR-025**: The system MUST NOT begin a topology change while the cluster has open or uncovered slots (e.g., a previous migration was interrupted); it MUST first repair the cluster to full keyspace coverage, then proceed.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -133,6 +138,7 @@ A user's needs change and they edit the topology — most importantly the number
 - **SC-004**: Killing the operator at any point during forming or resharding still results in the cluster converging to the declared topology with no manual intervention and no data loss.
 - **SC-005**: The status shown for a cluster matches its real state (phase, per-shard primary, served keyspace) on every reconciliation, so an operator can trust `status` without inspecting nodes directly.
 - **SC-006**: The benchmark demonstrates a measurable increase in aggregate write throughput as shard count increases (e.g., a 3-shard cluster outperforms a 1-shard cluster on a write-heavy workload), quantifying the sharding trade-off.
+- **SC-007**: Restarting or rescheduling any node (with its storage intact) results in that node rejoining the same cluster under its original identity — with no split, no duplicate membership, no manual intervention, and no data loss.
 
 ## Assumptions
 
