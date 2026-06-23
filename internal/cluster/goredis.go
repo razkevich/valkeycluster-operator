@@ -226,7 +226,6 @@ func (a *Admin) MoveSlots(ctx context.Context, seed Endpoint, fromNodeID, toNode
 	}()
 	fromCl, toCl := clientFor(*from), clientFor(*to)
 
-	// flatten the source's owned slots, take up to n
 	var slots []int
 	for _, r := range from.Slots {
 		for s := r.Start; s <= r.End && len(slots) < n; s++ {
@@ -462,9 +461,8 @@ func parseOpenSlots(nodesRaw string) []int {
 		if !strings.HasPrefix(f, "[") {
 			continue
 		}
-		// f looks like [781->-<id>] or [781-<-<id>]
+		// f looks like [781->-<id>] or [781-<-<id>]; take the leading digits.
 		body := strings.TrimPrefix(f, "[")
-		// slot number is the leading digits
 		end := 0
 		for end < len(body) && body[end] >= '0' && body[end] <= '9' {
 			end++

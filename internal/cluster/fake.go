@@ -193,7 +193,6 @@ func (f *Fake) Reshard(_ context.Context, _ Endpoint, fromNodeID, toNodeID strin
 	to.Flags = []string{"master"}
 
 	if fromNodeID != "" {
-		// move up to n slots from the named source to the target
 		from, ok := f.nodes[fromNodeID]
 		if !ok {
 			return nil

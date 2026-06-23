@@ -34,3 +34,6 @@ go.work
 
 # JetBrains IDE
 .idea/
+
+# Serena MCP local cache
+.serena/

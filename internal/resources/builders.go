@@ -127,7 +127,6 @@ func RenderValkeyConf(cr *cachev1alpha1.ValkeyCluster) string {
 		policy = "noeviction"
 	}
 	fmt.Fprintf(&b, "maxmemory-policy %s\n", policy)
-	// AOF
 	if aofOn {
 		fmt.Fprintf(&b, "appendonly yes\n")
 		fmt.Fprintf(&b, "appendfsync %s\n", fsync)
