@@ -263,8 +263,12 @@ func (a *Admin) MoveSlots(ctx context.Context, seed Endpoint, fromNodeID, toNode
 				return moved, fmt.Errorf("migrate slot %d: %w", s, err)
 			}
 		}
-		// 3. assign ownership on every node (target + source first, then the rest)
+		// 3. assign ownership on every MASTER (SETSLOT is rejected on replicas;
+		// they learn the new owner via gossip).
 		for _, nd := range nodes {
+			if !nd.IsPrimary() {
+				continue
+			}
 			if err := clientFor(nd).Do(ctx, "CLUSTER", "SETSLOT", s, "NODE", to.ID).Err(); err != nil {
 				return moved, fmt.Errorf("setslot node %d on %s: %w", s, nd.ID, err)
 			}
@@ -342,9 +346,10 @@ func (a *Admin) RepairSlots(ctx context.Context, seed Endpoint) (int, error) {
 		if !ok || owner.IP == "" {
 			continue // uncovered slot — coverage repair is a separate concern
 		}
-		// 1. migrate any stray keys for this slot to the owner (single-key, by IP)
+		// 1. migrate any stray keys for this slot to the owner (single-key, by IP).
+		// Only masters hold slot keys.
 		for _, n := range nodes {
-			if n.ID == owner.ID || n.IP == "" {
+			if n.ID == owner.ID || n.IP == "" || !n.IsPrimary() {
 				continue
 			}
 			cn := goredis.NewClient(&goredis.Options{Addr: fmt.Sprintf("%s:%d", n.IP, n.Port)})
@@ -354,8 +359,12 @@ func (a *Admin) RepairSlots(ctx context.Context, seed Endpoint) (int, error) {
 			}
 			_ = cn.Close()
 		}
-		// 2. clear migration markers and assert ownership on every node
+		// 2. clear migration markers + assert ownership on every MASTER (SETSLOT is
+		// rejected on replicas).
 		for _, n := range nodes {
+			if !n.IsPrimary() {
+				continue
+			}
 			addr := n.IP
 			if addr == "" {
 				addr = n.Host
