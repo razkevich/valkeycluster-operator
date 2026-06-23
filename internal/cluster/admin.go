@@ -118,6 +118,9 @@ type ClusterAdmin interface {
 	// State observes the cluster starting from a reachable seed node.
 	State(ctx context.Context, seed Endpoint) (ClusterState, error)
 
+	// MyID returns the node ID of the node at ep (CLUSTER MYID), dialing it directly.
+	MyID(ctx context.Context, ep Endpoint) (string, error)
+
 	// Meet introduces target into from's view of the cluster (CLUSTER MEET).
 	Meet(ctx context.Context, from, target Endpoint) error
 	// AddSlots assigns slot ranges to the primary (CLUSTER ADDSLOTSRANGE).

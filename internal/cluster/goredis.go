@@ -19,6 +19,7 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 
@@ -72,10 +73,38 @@ func (a *Admin) State(ctx context.Context, seed Endpoint) (ClusterState, error) 
 	}, nil
 }
 
+func (a *Admin) MyID(ctx context.Context, ep Endpoint) (string, error) {
+	c := dial(ep)
+	defer c.Close()
+	return c.ClusterMyID(ctx).Result()
+}
+
 func (a *Admin) Meet(ctx context.Context, from, target Endpoint) error {
 	c := dial(from)
 	defer c.Close()
-	return c.ClusterMeet(ctx, target.Host, strconv.Itoa(target.Port)).Err()
+	// CLUSTER MEET requires an IP address, not a hostname. Resolve the target's
+	// stable FQDN to an IP for the meet; the node still advertises its hostname
+	// (cluster-announce-hostname) so gossip and client redirects use the FQDN.
+	ip, err := resolveHost(ctx, target.Host)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", target.Host, err)
+	}
+	return c.ClusterMeet(ctx, ip, strconv.Itoa(target.Port)).Err()
+}
+
+// resolveHost returns an IP for host (host may already be an IP).
+func resolveHost(ctx context.Context, host string) (string, error) {
+	if ip := net.ParseIP(host); ip != nil {
+		return host, nil
+	}
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return "", err
+	}
+	if len(addrs) == 0 {
+		return "", fmt.Errorf("no addresses for %s", host)
+	}
+	return addrs[0], nil
 }
 
 func (a *Admin) AddSlots(ctx context.Context, primary Endpoint, ranges []SlotRange) error {

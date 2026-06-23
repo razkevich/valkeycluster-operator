@@ -72,6 +72,13 @@ func (f *Fake) State(_ context.Context, _ Endpoint) (ClusterState, error) {
 	}, nil
 }
 
+// MyID returns the node ID (== host) for the endpoint, creating it if unseen.
+func (f *Fake) MyID(_ context.Context, ep Endpoint) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ensure(ep).ID, nil
+}
+
 // Meet adds both endpoints to the membership view.
 func (f *Fake) Meet(_ context.Context, from, target Endpoint) error {
 	f.mu.Lock()

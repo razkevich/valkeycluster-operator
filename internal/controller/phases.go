@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -219,18 +220,29 @@ func (r *ValkeyClusterReconciler) formCluster(ctx context.Context, cr *cachev1al
 	return r.attachReplicas(ctx, cr, state)
 }
 
-// scaleOut joins new empty primaries and rebalances slots onto them, then attaches their replicas.
+// scaleOut joins only each new shard's primary (ordinal 0) as an empty master,
+// rebalances slots onto exactly those new primaries, then joins and attaches the
+// new shards' replicas. Joining replicas before the rebalance would let
+// --cluster-use-empty-masters hand them slots too, creating spurious primaries.
 func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, oldShards int) error {
 	seed := r.seed(cr)
+	// 1. join new primaries only
 	for i := oldShards; i < int(cr.Spec.Shards); i++ {
-		for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
+		if err := r.Admin.Meet(ctx, seed, r.endpoint(cr, i, 0)); err != nil {
+			return err
+		}
+	}
+	// 2. rebalance slots onto the new empty primaries
+	if err := r.Admin.Rebalance(ctx, seed, cluster.RebalanceOpts{UseEmptyMasters: true}); err != nil {
+		return fmt.Errorf("rebalance (scale out): %w", err)
+	}
+	// 3. join the new shards' replicas (now that slots are placed) and attach them
+	for i := oldShards; i < int(cr.Spec.Shards); i++ {
+		for j := 1; j <= int(cr.Spec.ReplicasPerShard); j++ {
 			if err := r.Admin.Meet(ctx, seed, r.endpoint(cr, i, j)); err != nil {
 				return err
 			}
 		}
-	}
-	if err := r.Admin.Rebalance(ctx, seed, cluster.RebalanceOpts{UseEmptyMasters: true}); err != nil {
-		return fmt.Errorf("rebalance (scale out): %w", err)
 	}
 	state, err := r.Admin.State(ctx, seed)
 	if err != nil {
@@ -263,18 +275,27 @@ func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1
 	return nil
 }
 
-// attachReplicas ensures each non-primary pod replicates its shard's current primary.
+// attachReplicas ensures each non-primary pod replicates its shard's current
+// primary. The primary is found by dialing the shard's pods directly (CLUSTER
+// MYID) and matching against the gossiped slot ownership — robust to the
+// announce-hostname gossip lag and to failover (the primary may not be ordinal 0).
 func (r *ValkeyClusterReconciler) attachReplicas(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, state cluster.ClusterState) error {
-	byHost := hostIndex(state)
+	idx := byID(state)
 	for i := 0; i < int(cr.Spec.Shards); i++ {
-		primaryID := r.shardPrimaryID(cr, i, byHost)
+		primaryID, primaryOrd := r.findShardPrimary(ctx, cr, i, idx)
 		if primaryID == "" {
-			continue
+			continue // not observable yet; retry on next reconcile
 		}
-		for j := 1; j <= int(cr.Spec.ReplicasPerShard); j++ {
+		for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
+			if j == primaryOrd {
+				continue
+			}
 			ep := r.endpoint(cr, i, j)
-			n, ok := byHost[ep.Host]
-			if ok && n.MasterID == primaryID {
+			id, err := r.Admin.MyID(ctx, ep)
+			if err != nil {
+				continue
+			}
+			if n, ok := idx[id]; ok && n.MasterID == primaryID {
 				continue // already replicating the right primary
 			}
 			if err := r.Admin.Replicate(ctx, ep, primaryID); err != nil {
@@ -283,6 +304,25 @@ func (r *ValkeyClusterReconciler) attachReplicas(ctx context.Context, cr *cachev
 		}
 	}
 	return nil
+}
+
+// findShardPrimary returns the node ID and ordinal of shard i's primary: the
+// shard-i pod that is a master owning slots. Falls back to ordinal 0 (the
+// initial primary during formation, before slot gossip settles).
+func (r *ValkeyClusterReconciler) findShardPrimary(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, shard int, idx map[string]cluster.NodeInfo) (string, int) {
+	for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
+		id, err := r.Admin.MyID(ctx, r.endpoint(cr, shard, j))
+		if err != nil {
+			continue
+		}
+		if n, ok := idx[id]; ok && n.IsPrimary() && n.SlotCount() > 0 {
+			return id, j
+		}
+	}
+	if id, err := r.Admin.MyID(ctx, r.endpoint(cr, shard, 0)); err == nil {
+		return id, 0
+	}
+	return "", -1
 }
 
 // reconcileMembership keeps the live membership aligned with desired pods:
@@ -312,20 +352,6 @@ func (r *ValkeyClusterReconciler) reconcileMembership(ctx context.Context, cr *c
 		}
 	}
 	return nil
-}
-
-// shardPrimaryID returns the node ID of shard i's current primary (the shard-i
-// pod that is a master), falling back to ordinal 0.
-func (r *ValkeyClusterReconciler) shardPrimaryID(cr *cachev1alpha1.ValkeyCluster, shard int, byHost map[string]cluster.NodeInfo) string {
-	for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
-		if n, ok := byHost[resources.PodFQDN(cr, shard, j)]; ok && n.IsPrimary() {
-			return n.ID
-		}
-	}
-	if n, ok := byHost[resources.PodFQDN(cr, shard, 0)]; ok {
-		return n.ID
-	}
-	return ""
 }
 
 // ---- status ----
@@ -362,35 +388,46 @@ func (r *ValkeyClusterReconciler) updateStatus(ctx context.Context, cr *cachev1a
 		shardStatuses = append(shardStatuses, ss)
 	}
 
-	cr.Status.Shards = shardStatuses
-	cr.Status.ReadyShards = int32(ready)
-	cr.Status.ObservedGeneration = cr.Generation
-
 	allReady := ready == int(cr.Spec.Shards) && state.SlotsCovered
-	if allReady {
-		cr.Status.Phase = cachev1alpha1.PhaseReady
-		setCond(cr, cachev1alpha1.ConditionAvailable, metav1.ConditionTrue, "Ready", "all shards serving, full keyspace covered")
-		setCond(cr, cachev1alpha1.ConditionProgressing, metav1.ConditionFalse, "Ready", "converged")
-		setCond(cr, cachev1alpha1.ConditionDegraded, metav1.ConditionFalse, "Ready", "healthy")
-	} else if ready == 0 {
-		cr.Status.Phase = cachev1alpha1.PhaseDegraded
-		setCond(cr, cachev1alpha1.ConditionAvailable, metav1.ConditionFalse, "NoPrimaries", "no shard has a reachable primary")
-		setCond(cr, cachev1alpha1.ConditionDegraded, metav1.ConditionTrue, "NoPrimaries", "no shard has a reachable primary")
-	} else {
-		// some shards serving but not all / slots not fully covered
-		if cr.Status.Phase == cachev1alpha1.PhaseReady || cr.Status.Phase == "" {
-			cr.Status.Phase = cachev1alpha1.PhaseDegraded
+	key := types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &cachev1alpha1.ValkeyCluster{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
 		}
-		setCond(cr, cachev1alpha1.ConditionAvailable, metav1.ConditionFalse, "PartialCoverage", "not all shards serving or keyspace not fully covered")
-		setCond(cr, cachev1alpha1.ConditionDegraded, metav1.ConditionTrue, "PartialCoverage", "degraded")
-	}
-	return r.Status().Update(ctx, cr)
+		latest.Status.Shards = shardStatuses
+		latest.Status.ReadyShards = int32(ready)
+		latest.Status.ObservedGeneration = latest.Generation
+		switch {
+		case allReady:
+			latest.Status.Phase = cachev1alpha1.PhaseReady
+			setCond(latest, cachev1alpha1.ConditionAvailable, metav1.ConditionTrue, "Ready", "all shards serving, full keyspace covered")
+			setCond(latest, cachev1alpha1.ConditionProgressing, metav1.ConditionFalse, "Ready", "converged")
+			setCond(latest, cachev1alpha1.ConditionDegraded, metav1.ConditionFalse, "Ready", "healthy")
+		case ready == 0:
+			latest.Status.Phase = cachev1alpha1.PhaseDegraded
+			setCond(latest, cachev1alpha1.ConditionAvailable, metav1.ConditionFalse, "NoPrimaries", "no shard has a reachable primary")
+			setCond(latest, cachev1alpha1.ConditionDegraded, metav1.ConditionTrue, "NoPrimaries", "no shard has a reachable primary")
+		default:
+			latest.Status.Phase = cachev1alpha1.PhaseDegraded
+			setCond(latest, cachev1alpha1.ConditionAvailable, metav1.ConditionFalse, "PartialCoverage", "not all shards serving or keyspace not fully covered")
+			setCond(latest, cachev1alpha1.ConditionDegraded, metav1.ConditionTrue, "PartialCoverage", "degraded")
+		}
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 func (r *ValkeyClusterReconciler) setPhase(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, phase cachev1alpha1.ValkeyClusterPhase, reason, msg string) error {
-	cr.Status.Phase = phase
-	setCond(cr, cachev1alpha1.ConditionProgressing, metav1.ConditionTrue, reason, msg)
-	return r.Status().Update(ctx, cr)
+	key := types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &cachev1alpha1.ValkeyCluster{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status.Phase = phase
+		setCond(latest, cachev1alpha1.ConditionProgressing, metav1.ConditionTrue, reason, msg)
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 // ---- teardown ----
@@ -434,19 +471,21 @@ func (r *ValkeyClusterReconciler) deleteOwnedPVCs(ctx context.Context, cr *cache
 // ---- helpers ----
 
 // summarize reduces a ClusterState to the topology.Observed decision inputs.
+// A "shard" is a master that owns slots; empty masters are pending replicas and
+// are not counted as shards (so a half-attached cluster is not mistaken for one
+// with extra shards).
 func summarize(cr *cachev1alpha1.ValkeyCluster, state cluster.ClusterState) topology.Observed {
-	primaries := 0
 	replicaByPrimary := map[string]int{}
 	for _, n := range state.Nodes {
-		if n.IsPrimary() {
-			primaries++
-		} else if n.MasterID != "" {
+		if !n.IsPrimary() && n.MasterID != "" {
 			replicaByPrimary[n.MasterID]++
 		}
 	}
+	primaries := 0
 	var counts []int
 	for _, n := range state.Nodes {
-		if n.IsPrimary() {
+		if n.IsPrimary() && n.SlotCount() > 0 {
+			primaries++
 			counts = append(counts, replicaByPrimary[n.ID])
 		}
 	}
@@ -456,6 +495,14 @@ func summarize(cr *cachev1alpha1.ValkeyCluster, state cluster.ClusterState) topo
 		PrimaryCount:  primaries,
 		ReplicaCounts: counts,
 	}
+}
+
+func byID(state cluster.ClusterState) map[string]cluster.NodeInfo {
+	m := map[string]cluster.NodeInfo{}
+	for _, n := range state.Nodes {
+		m[n.ID] = n
+	}
+	return m
 }
 
 func hostIndex(state cluster.ClusterState) map[string]cluster.NodeInfo {
