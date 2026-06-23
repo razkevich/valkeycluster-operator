@@ -6,4 +6,5 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: rediscluster-sample
 spec:
-  # TODO(user): Add fields here
+  replicas: 3
+  image: redis:7
