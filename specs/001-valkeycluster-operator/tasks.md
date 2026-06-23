@@ -39,7 +39,7 @@ Paths are relative to the repo root. `[P]` = parallelizable (distinct files, no 
 - [x] T021 [US1] Status derivation in `internal/controller/phases.go`: build phase/conditions/shards[] from live ClusterState (Available when 100% covered)
 - [x] T022 [US1] Controller wiring in `cmd/main.go` / SetupWithManager: owns StatefulSet/Service/ConfigMap; inject ClusterAdmin
 - [x] T023 [P] [US1] envtest in `internal/controller/valkeycluster_controller_test.go` with fake ClusterAdmin: creates expected resources + owner refs, reaches Ready, status correct
-- [ ] T024 [US1] e2e in `test/e2e/`: apply shards:3/replicas:1 on kind, wait Ready, assert slot coverage + cross-shard set/get via valkey-cli -c
+- [x] T024 [US1] e2e in `test/e2e/`: apply shards:3/replicas:1 on kind, wait Ready, assert slot coverage + cross-shard set/get via valkey-cli -c
 - [x] T025 [US1] Sample CR `config/samples/cache_v1alpha1_valkeycluster.yaml` updated to shards:3/replicas:1 with haPolicy
 
 **Checkpoint**: US1 independently demonstrable.
@@ -52,7 +52,7 @@ Paths are relative to the repo root. `[P]` = parallelizable (distinct files, no 
 - [x] T026 [US2] Reconcile handles role changes: re-read roles each loop, never assume ordinal-0 primary; ensure rescheduled pod re-joins (Meet if gossip stale) in `internal/controller/phases.go`
 - [x] T027 [US2] Degraded status when a shard has no reachable primary / `replicasPerShard:0` node lost (`internal/controller/phases.go`)
 - [x] T028 [P] [US2] envtest: fake reports primary down + replica promoted → status transitions Available→Degraded→Available
-- [ ] T029 [US2] e2e: write keys, delete primary pod, assert auto-failover + data intact + status updated
+- [x] T029 [US2] e2e: write keys, delete primary pod, assert auto-failover + data intact + status updated
 
 **Checkpoint**: US1 + US2 work.
 
@@ -66,8 +66,8 @@ Paths are relative to the repo root. `[P]` = parallelizable (distinct files, no 
 - [x] T032 [US3] Scale-down shards: Rebalance(WeightZero on departing primaries) → handoff primary via Failover if needed → Forget → delete STS + reclaim PVCs (FR-013/023)
 - [x] T033 [US3] Replica scaling: scale shard STS for `replicasPerShard` change → Replicate new / Forget removed; phase=ScalingReplicas
 - [x] T034 [P] [US3] envtest: topology transitions (add/remove shard, add/remove replica) drive the expected ClusterAdmin action sequence via fake
-- [ ] T035 [US3] e2e: write keyset, patch shards 3→5, wait Ready, assert every prior key readable + 5-shard coverage; then 5→3 and re-assert
-- [ ] T036 [US3] e2e: patch replicasPerShard 1→2, assert each shard gains a replica, no resharding
+- [x] T035 [US3] e2e: write keyset, patch shards 3→5, wait Ready, assert every prior key readable + 5-shard coverage; then 5→3 and re-assert
+- [x] T036 [US3] e2e: patch replicasPerShard 1→2, assert each shard gains a replica, no resharding
 
 **Checkpoint**: all three user stories work.
 
@@ -88,7 +88,7 @@ Paths are relative to the repo root. `[P]` = parallelizable (distinct files, no 
 
 - [x] T044 `make build && make test && go vet ./...` all green
 - [x] T045 Manual verification on kind (per quickstart.md): deploy operator, apply CR, **use the Valkey instances** (set/get across shards via valkey-cli -c), kill a primary (failover), reshard 3→5 (data preserved), teardown — capture output
-- [ ] T046 Run `make test-e2e` (kind) and confirm green; record any flakes/limitations
+- [x] T046 Run `make test-e2e` (kind) and confirm green; record any flakes/limitations
 - [x] T047 Final commit + push; ensure repo is clean and public repo current
 
 ## Dependencies & order

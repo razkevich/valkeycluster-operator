@@ -35,5 +35,8 @@ directly. Reproduce with [quickstart.md](../specs/001-valkeycluster-operator/qui
 - Two real bugs were found and fixed during this verification (see commit history): `CLUSTER MEET`
   requires an IP (resolve FQDN → IP; nodes still announce hostname), and scale-out had to join only
   the new primary before `rebalance --use-empty-masters` so replicas don't become spurious primaries.
-- Automated kind e2e (`make test-e2e`) for these flows is a known follow-up; behavior here is
-  verified manually and the reconcile decision logic is covered by envtest with a fake cluster.
+- These flows are now also covered by an **automated Ginkgo e2e suite** in
+  `test/e2e/valkeycluster_test.go` (provision+use, failover, reshard 3→5, replica scaling),
+  which passes against a real Valkey cluster on Kind. Run it with:
+  `CERT_MANAGER_INSTALL_SKIP=true KIND_CLUSTER=valkeycluster-dev go test -tags e2e ./test/e2e/ -timeout 1800s -args -ginkgo.focus="ValkeyCluster lifecycle"`.
+  The reconcile decision logic is additionally covered by envtest with a fake cluster.
