@@ -38,6 +38,11 @@ const finalizer = "cache.razkevich.dev/finalizer"
 // requeueAfter paces re-reconciliation while the cluster converges.
 const requeueAfter = 15 * time.Second
 
+// reshardRequeue is the (short) requeue while a form/repair/reshard is still in
+// flight, so multi-batch operations run as a tight loop rather than one batch
+// every requeueAfter.
+const reshardRequeue = 1 * time.Second
+
 // ValkeyClusterReconciler reconciles a ValkeyCluster object.
 type ValkeyClusterReconciler struct {
 	client.Client
@@ -103,11 +108,17 @@ func (r *ValkeyClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	// 4. Observe → decide → act → status.
-	if err := r.reconcileCluster(ctx, cr); err != nil {
+	progressing, err := r.reconcileCluster(ctx, cr)
+	if err != nil {
 		l.Error(err, "cluster reconcile step failed; will retry")
 		return ctrl.Result{RequeueAfter: requeueAfter}, nil
 	}
 
+	// While a topology change is in flight, requeue fast so a reshard runs as a
+	// tight loop instead of one batch per steady interval. Otherwise idle-poll.
+	if progressing {
+		return ctrl.Result{RequeueAfter: reshardRequeue}, nil
+	}
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 

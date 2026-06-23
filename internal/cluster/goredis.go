@@ -236,41 +236,62 @@ func (a *Admin) MoveSlots(ctx context.Context, seed Endpoint, fromNodeID, toNode
 		}
 	}
 
+	// Pre-resolve the master clients once. SETSLOT NODE must run on every master
+	// (replicas reject it and learn the new owner via gossip).
+	var masterCls []*goredis.Client
+	for _, nd := range nodes {
+		if nd.IsPrimary() {
+			masterCls = append(masterCls, clientFor(nd))
+		}
+	}
+	assignOwner := func(s int) error {
+		for _, cl := range masterCls {
+			if err := cl.Do(ctx, "CLUSTER", "SETSLOT", s, "NODE", to.ID).Err(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	moved := 0
 	for _, s := range slots {
-		// 1. mark the slot importing on the target, migrating on the source
-		if err := toCl.Do(ctx, "CLUSTER", "SETSLOT", s, "IMPORTING", from.ID).Err(); err != nil {
-			return moved, fmt.Errorf("setslot importing %d: %w", s, err)
+		// Fast path: an empty slot has nothing to migrate, so skip the
+		// IMPORTING/MIGRATING handshake and the key-move loop and just reassign
+		// ownership. This is the common case for sparse data and removes ~2 RPCs
+		// per slot. A cheap count=1 probe distinguishes empty from non-empty.
+		probe, err := fromCl.ClusterGetKeysInSlot(ctx, s, 1).Result()
+		if err != nil {
+			return moved, fmt.Errorf("getkeysinslot %d: %w", s, err)
 		}
-		if err := fromCl.Do(ctx, "CLUSTER", "SETSLOT", s, "MIGRATING", to.ID).Err(); err != nil {
-			return moved, fmt.Errorf("setslot migrating %d: %w", s, err)
+		if len(probe) > 0 {
+			// 1. mark the slot importing on the target, migrating on the source
+			if err := toCl.Do(ctx, "CLUSTER", "SETSLOT", s, "IMPORTING", from.ID).Err(); err != nil {
+				return moved, fmt.Errorf("setslot importing %d: %w", s, err)
+			}
+			if err := fromCl.Do(ctx, "CLUSTER", "SETSLOT", s, "MIGRATING", to.ID).Err(); err != nil {
+				return moved, fmt.Errorf("setslot migrating %d: %w", s, err)
+			}
+			// 2. move the slot's keys (REPLACE = idempotent if a prior attempt copied them)
+			for {
+				keys, err := fromCl.ClusterGetKeysInSlot(ctx, s, 128).Result()
+				if err != nil {
+					return moved, fmt.Errorf("getkeysinslot %d: %w", s, err)
+				}
+				if len(keys) == 0 {
+					break
+				}
+				args := []interface{}{"MIGRATE", to.IP, to.Port, "", 0, 5000, "REPLACE", "KEYS"}
+				for _, k := range keys {
+					args = append(args, k)
+				}
+				if err := fromCl.Do(ctx, args...).Err(); err != nil {
+					return moved, fmt.Errorf("migrate slot %d: %w", s, err)
+				}
+			}
 		}
-		// 2. move the slot's keys (REPLACE = idempotent if a prior attempt copied them)
-		for {
-			keys, err := fromCl.ClusterGetKeysInSlot(ctx, s, 128).Result()
-			if err != nil {
-				return moved, fmt.Errorf("getkeysinslot %d: %w", s, err)
-			}
-			if len(keys) == 0 {
-				break
-			}
-			args := []interface{}{"MIGRATE", to.IP, to.Port, "", 0, 5000, "REPLACE", "KEYS"}
-			for _, k := range keys {
-				args = append(args, k)
-			}
-			if err := fromCl.Do(ctx, args...).Err(); err != nil {
-				return moved, fmt.Errorf("migrate slot %d: %w", s, err)
-			}
-		}
-		// 3. assign ownership on every MASTER (SETSLOT is rejected on replicas;
-		// they learn the new owner via gossip).
-		for _, nd := range nodes {
-			if !nd.IsPrimary() {
-				continue
-			}
-			if err := clientFor(nd).Do(ctx, "CLUSTER", "SETSLOT", s, "NODE", to.ID).Err(); err != nil {
-				return moved, fmt.Errorf("setslot node %d on %s: %w", s, nd.ID, err)
-			}
+		// 3. assign ownership on every master (replicas learn the owner via gossip)
+		if err := assignOwner(s); err != nil {
+			return moved, fmt.Errorf("setslot node %d: %w", s, err)
 		}
 		moved++
 	}

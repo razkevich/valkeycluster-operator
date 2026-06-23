@@ -34,10 +34,11 @@ import (
 )
 
 // drainBatchSlots bounds how many slots a single scale-in drain moves per
-// reconcile. Smaller batches commit progress incrementally and keep any single
-// reshard short, so a transient MIGRATE stall costs a small retry rather than
-// aborting a large drain.
-const drainBatchSlots = 256
+// reconcile. Bounded so any one reshard stays short and a transient MIGRATE stall
+// costs a small retry rather than aborting a large drain; the controller requeues
+// fast between batches (reshardRequeue), so a larger batch + tight loop drains a
+// whole shard in seconds for sparse data instead of minutes.
+const drainBatchSlots = 1024
 
 // scaleOut joins each new shard's primary (ordinal 0), moves that primary its
 // fair share of slots with a *targeted* reshard (never --use-empty-masters, which

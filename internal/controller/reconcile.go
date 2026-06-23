@@ -30,13 +30,17 @@ import (
 
 // ---- observe / decide / act ----
 
-func (r *ValkeyClusterReconciler) reconcileCluster(ctx context.Context, cr *cachev1alpha1.ValkeyCluster) error {
+// reconcileCluster runs one observe→decide→act→status pass. It returns
+// progressing=true when a topology change (form/repair/scale) is still in flight,
+// so the caller can requeue quickly instead of waiting the steady interval —
+// turning a multi-minute reshard (one batch per steady requeue) into a tight loop.
+func (r *ValkeyClusterReconciler) reconcileCluster(ctx context.Context, cr *cachev1alpha1.ValkeyCluster) (progressing bool, err error) {
 	l := log.FromContext(ctx)
 	seed := r.seed(cr)
 
 	state, err := r.Admin.State(ctx, seed)
 	if err != nil {
-		return fmt.Errorf("observe cluster: %w", err)
+		return false, fmt.Errorf("observe cluster: %w", err)
 	}
 
 	observed := summarize(cr, state)
@@ -55,19 +59,23 @@ func (r *ValkeyClusterReconciler) reconcileCluster(ctx context.Context, cr *cach
 	if plan.Kind != topology.ActionForm && plan.Kind != topology.ActionScaleOutShards {
 		excess, err := r.hasExcessShardStatefulSets(ctx, cr)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if excess {
 			plan = topology.Plan{Kind: topology.ActionScaleInShards}
 		}
 	}
 
+	// A form/repair/reshard is multi-step; signal the caller to requeue fast until it settles.
+	progressing = plan.Kind == topology.ActionForm || plan.Kind == topology.ActionRepair ||
+		plan.Kind == topology.ActionScaleOutShards || plan.Kind == topology.ActionScaleInShards
+
 	switch plan.Kind {
 	case topology.ActionForm:
 		l.Info("forming cluster")
 		_ = r.setPhase(ctx, cr, cachev1alpha1.PhaseForming, "Forming", "bootstrapping cluster")
 		if err := r.formCluster(ctx, cr); err != nil {
-			return err
+			return false, err
 		}
 	case topology.ActionRepair:
 		_ = r.setPhase(ctx, cr, cachev1alpha1.PhaseResharding, "Repairing", "fixing open slots")
@@ -85,33 +93,33 @@ func (r *ValkeyClusterReconciler) reconcileCluster(ctx context.Context, cr *cach
 		l.Info("scaling out shards", "add", plan.AddShards)
 		_ = r.setPhase(ctx, cr, cachev1alpha1.PhaseResharding, "Resharding", "adding shards")
 		if err := r.scaleOut(ctx, cr, observed.PrimaryCount); err != nil {
-			return err
+			return false, err
 		}
 	case topology.ActionScaleInShards:
 		l.Info("scaling in shards", "remove", plan.RemoveShards)
 		_ = r.setPhase(ctx, cr, cachev1alpha1.PhaseResharding, "Resharding", "removing shards")
 		if err := r.scaleIn(ctx, cr, state, observed.PrimaryCount); err != nil {
-			return err
+			return false, err
 		}
 	case topology.ActionScaleReplicas:
 		l.Info("reconciling replicas")
 		_ = r.setPhase(ctx, cr, cachev1alpha1.PhaseScalingReplicas, "ScalingReplicas", "adjusting replicas")
 		if err := r.reconcileMembership(ctx, cr, state); err != nil {
-			return err
+			return false, err
 		}
 	case topology.ActionNone:
 		// keep replication wiring healthy (rejoin after failover, forget stale)
 		if err := r.reconcileMembership(ctx, cr, state); err != nil {
-			return err
+			return false, err
 		}
 	}
 
 	// Refresh and publish status.
 	state, err = r.Admin.State(ctx, seed)
 	if err != nil {
-		return fmt.Errorf("observe cluster (post-action): %w", err)
+		return false, fmt.Errorf("observe cluster (post-action): %w", err)
 	}
-	return r.updateStatus(ctx, cr, state)
+	return progressing, r.updateStatus(ctx, cr, state)
 }
 
 // formCluster bootstraps a fresh cluster: meet all, assign slots to per-shard
