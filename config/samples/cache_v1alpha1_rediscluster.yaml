@@ -1,0 +1,9 @@
+apiVersion: cache.razkevich.dev/v1alpha1
+kind: RedisCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: rediscluster
+    app.kubernetes.io/managed-by: kustomize
+  name: rediscluster-sample
+spec:
+  # TODO(user): Add fields here
