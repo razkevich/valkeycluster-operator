@@ -243,6 +243,28 @@ func countToRanges(count int) []SlotRange {
 // produces open/mid-migration slots.
 func (f *Fake) RepairSlots(_ context.Context, _ Endpoint) (int, error) { return 0, nil }
 
+// MoveSlots moves up to n slots from fromNodeID to toNodeID atomically.
+func (f *Fake) MoveSlots(_ context.Context, _ Endpoint, fromNodeID, toNodeID string, n int) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	from, ok := f.nodes[fromNodeID]
+	if !ok {
+		return 0, nil
+	}
+	to, ok := f.nodes[toNodeID]
+	if !ok {
+		return 0, nil
+	}
+	moved := n
+	if c := from.SlotCount(); c < moved {
+		moved = c
+	}
+	from.Slots = countToRanges(from.SlotCount() - moved)
+	to.MasterID, to.Flags = "", []string{"master"}
+	to.Slots = countToRanges(to.SlotCount() + moved)
+	return moved, nil
+}
+
 // Fix ensures full coverage by rebalancing across current primaries.
 func (f *Fake) Fix(ctx context.Context, seed Endpoint) error {
 	return f.Rebalance(ctx, seed, RebalanceOpts{})

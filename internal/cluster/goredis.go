@@ -178,6 +178,102 @@ func (a *Admin) Reshard(ctx context.Context, seed Endpoint, fromNodeID, toNodeID
 	return err
 }
 
+// MoveSlots moves up to n of fromNodeID's slots to toNodeID, natively in Go.
+func (a *Admin) MoveSlots(ctx context.Context, seed Endpoint, fromNodeID, toNodeID string, n int) (int, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+	c := dial(seed)
+	nodesRaw, err := c.ClusterNodes(ctx).Result()
+	_ = c.Close()
+	if err != nil {
+		return 0, err
+	}
+	nodes := parseNodes(nodesRaw)
+
+	var from, to *NodeInfo
+	for i := range nodes {
+		if nodes[i].ID == fromNodeID {
+			from = &nodes[i]
+		}
+		if nodes[i].ID == toNodeID {
+			to = &nodes[i]
+		}
+	}
+	if from == nil || to == nil {
+		return 0, fmt.Errorf("move slots: from/to node not found")
+	}
+
+	// per-node client cache (dial by IP — direct, no DNS)
+	clients := map[string]*goredis.Client{}
+	clientFor := func(nd NodeInfo) *goredis.Client {
+		addr := nd.IP
+		if addr == "" {
+			addr = nd.Host
+		}
+		key := fmt.Sprintf("%s:%d", addr, nd.Port)
+		if cl, ok := clients[key]; ok {
+			return cl
+		}
+		cl := goredis.NewClient(&goredis.Options{Addr: key})
+		clients[key] = cl
+		return cl
+	}
+	defer func() {
+		for _, cl := range clients {
+			_ = cl.Close()
+		}
+	}()
+	fromCl, toCl := clientFor(*from), clientFor(*to)
+
+	// flatten the source's owned slots, take up to n
+	var slots []int
+	for _, r := range from.Slots {
+		for s := r.Start; s <= r.End && len(slots) < n; s++ {
+			slots = append(slots, s)
+		}
+		if len(slots) >= n {
+			break
+		}
+	}
+
+	moved := 0
+	for _, s := range slots {
+		// 1. mark the slot importing on the target, migrating on the source
+		if err := toCl.Do(ctx, "CLUSTER", "SETSLOT", s, "IMPORTING", from.ID).Err(); err != nil {
+			return moved, fmt.Errorf("setslot importing %d: %w", s, err)
+		}
+		if err := fromCl.Do(ctx, "CLUSTER", "SETSLOT", s, "MIGRATING", to.ID).Err(); err != nil {
+			return moved, fmt.Errorf("setslot migrating %d: %w", s, err)
+		}
+		// 2. move the slot's keys (REPLACE = idempotent if a prior attempt copied them)
+		for {
+			keys, err := fromCl.ClusterGetKeysInSlot(ctx, s, 128).Result()
+			if err != nil {
+				return moved, fmt.Errorf("getkeysinslot %d: %w", s, err)
+			}
+			if len(keys) == 0 {
+				break
+			}
+			args := []interface{}{"MIGRATE", to.IP, to.Port, "", 0, 5000, "REPLACE", "KEYS"}
+			for _, k := range keys {
+				args = append(args, k)
+			}
+			if err := fromCl.Do(ctx, args...).Err(); err != nil {
+				return moved, fmt.Errorf("migrate slot %d: %w", s, err)
+			}
+		}
+		// 3. assign ownership on every node (target + source first, then the rest)
+		for _, nd := range nodes {
+			if err := clientFor(nd).Do(ctx, "CLUSTER", "SETSLOT", s, "NODE", to.ID).Err(); err != nil {
+				return moved, fmt.Errorf("setslot node %d on %s: %w", s, nd.ID, err)
+			}
+		}
+		moved++
+	}
+	return moved, nil
+}
+
 // Fix runs `valkey-cli --cluster fix` inside the seed pod to repair open slots.
 func (a *Admin) Fix(ctx context.Context, seed Endpoint) error {
 	args := []string{"valkey-cli", "--cluster", "fix", fmt.Sprintf("127.0.0.1:%d", seed.Port), "--cluster-yes", "--cluster-timeout", migrateTimeoutMillis}

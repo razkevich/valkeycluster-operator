@@ -305,17 +305,16 @@ func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1
 			if survID == "" {
 				return fmt.Errorf("no surviving primary to drain shard %d into", i)
 			}
-			// Drain in a bounded batch rather than one huge reshard: each batch
-			// commits real progress, so a transient MIGRATE stall costs only a
-			// small retry instead of aborting the whole drain. Return after one
-			// batch so the next reconcile re-reads fresh state and continues; the
-			// shard isn't deleted until it owns 0 slots.
+			// Drain in a bounded batch via the native Go slot-mover (idempotent,
+			// no valkey-cli pre-check refusals). Each batch commits real progress;
+			// return after one batch so the next reconcile re-reads fresh state and
+			// continues. The shard isn't deleted until it owns 0 slots.
 			batch := drainBatchSlots
 			if c := idx[departID].SlotCount(); c < batch {
 				batch = c
 			}
-			if err := r.Admin.Reshard(ctx, seed, departID, survID, batch); err != nil {
-				return fmt.Errorf("drain shard %d (batch): %w", i, err)
+			if moved, err := r.Admin.MoveSlots(ctx, seed, departID, survID, batch); err != nil {
+				return fmt.Errorf("drain shard %d (moved %d before error): %w", i, moved, err)
 			}
 			return nil
 		}

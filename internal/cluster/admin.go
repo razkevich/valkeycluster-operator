@@ -149,6 +149,13 @@ type ClusterAdmin interface {
 	// specific nodes (vs. Rebalance(UseEmptyMasters)) keeps slot movement
 	// deterministic and never hands slots to empty masters meant to be replicas.
 	Reshard(ctx context.Context, seed Endpoint, fromNodeID, toNodeID string, n int) error
+
+	// MoveSlots moves up to n of fromNodeID's slots (and their keys) to toNodeID,
+	// implemented natively in Go: SETSLOT IMPORTING/MIGRATING, MIGRATE ... REPLACE
+	// by IP, then SETSLOT NODE on every node. Unlike valkey-cli reshard it is
+	// idempotent (REPLACE) and never refuses on a pre-check, so scale-in converges
+	// reliably. Returns the number of slots moved.
+	MoveSlots(ctx context.Context, seed Endpoint, fromNodeID, toNodeID string, n int) (int, error)
 	// Fix repairs open/partially-migrated slots via valkey-cli --cluster fix.
 	Fix(ctx context.Context, seed Endpoint) error
 	// RepairSlots deterministically finalizes any open (importing/migrating) slots:
