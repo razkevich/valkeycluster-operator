@@ -67,10 +67,13 @@ func (a *Admin) State(ctx context.Context, seed Endpoint) (ClusterState, error) 
 	kv := parseInfo(info)
 	assigned, _ := strconv.Atoi(kv["cluster_slots_assigned"])
 	nodes := parseNodes(nodesRaw)
+	// Open-slot markers ([slot->-id]/[slot-<-id]) appear ONLY on the owning node's
+	// own "myself" line — they are not gossiped — so a single node's CLUSTER NODES
+	// misses open slots elsewhere. Detect cluster-wide by asking every node.
 	return ClusterState{
 		Formed:       kv["cluster_state"] != "" && assigned > 0,
 		SlotsCovered: kv["cluster_state"] == "ok" && assigned == TotalSlots,
-		OpenSlots:    hasOpenSlots(nodesRaw),
+		OpenSlots:    len(a.collectOpenSlots(ctx, nodes)) > 0,
 		Nodes:        nodes,
 	}, nil
 }
@@ -182,6 +185,33 @@ func (a *Admin) Fix(ctx context.Context, seed Endpoint) error {
 	return err
 }
 
+// collectOpenSlots returns every open (importing/migrating) slot across the whole
+// cluster. Open-slot markers live only on the owning node's own line, so we must
+// query each node and union the results.
+func (a *Admin) collectOpenSlots(ctx context.Context, nodes []NodeInfo) []int {
+	seen := map[int]bool{}
+	for _, n := range nodes {
+		addr := n.IP
+		if addr == "" {
+			addr = n.Host
+		}
+		cn := goredis.NewClient(&goredis.Options{Addr: fmt.Sprintf("%s:%d", addr, n.Port)})
+		raw, err := cn.ClusterNodes(ctx).Result()
+		_ = cn.Close()
+		if err != nil {
+			continue
+		}
+		for _, s := range parseOpenSlots(raw) {
+			seen[s] = true
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out
+}
+
 // RepairSlots deterministically finalizes every open slot. For each open slot it
 // finds the bitmap owner, migrates any stray keys (sitting on a non-owner) to the
 // owner by IP, then forces SETSLOT STABLE + SETSLOT NODE <owner> on every node.
@@ -193,11 +223,11 @@ func (a *Admin) RepairSlots(ctx context.Context, seed Endpoint) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	open := parseOpenSlots(nodesRaw)
+	nodes := parseNodes(nodesRaw)
+	open := a.collectOpenSlots(ctx, nodes)
 	if len(open) == 0 {
 		return 0, nil
 	}
-	nodes := parseNodes(nodesRaw)
 
 	ownerOf := func(slot int) (NodeInfo, bool) {
 		for _, n := range nodes {
