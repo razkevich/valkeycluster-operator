@@ -1,5 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
+# Name of the local kind cluster used by the kind-* targets below.
+KIND_CLUSTER ?= rediscluster-dev
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -174,6 +176,32 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
+
+##@ Local (kind)
+
+.PHONY: kind-create
+kind-create: ## Create the local kind cluster (KIND_CLUSTER) from hack/kind-cluster.yaml if it does not exist.
+	@if kind get clusters 2>/dev/null | grep -qx "$(KIND_CLUSTER)"; then \
+		echo "kind cluster '$(KIND_CLUSTER)' already exists; skipping."; \
+	else \
+		kind create cluster --name "$(KIND_CLUSTER)" --config hack/kind-cluster.yaml; \
+	fi
+
+.PHONY: kind-load
+kind-load: ## Load the IMG image into the local kind cluster (run docker-build first, or use kind-deploy).
+	kind load docker-image $(IMG) --name "$(KIND_CLUSTER)"
+
+.PHONY: kind-deploy
+kind-deploy: docker-build kind-load deploy ## Build the image, load it into kind, and deploy the operator in one step.
+
+.PHONY: kind-redeploy
+kind-redeploy: kind-deploy ## kind-deploy plus a rollout restart so the new image (same tag) is picked up.
+	"$(KUBECTL)" -n rediscluster-system rollout restart deployment/rediscluster-controller-manager
+	"$(KUBECTL)" -n rediscluster-system rollout status deployment/rediscluster-controller-manager
+
+.PHONY: kind-delete
+kind-delete: ## Delete the local kind cluster (KIND_CLUSTER).
+	kind delete cluster --name "$(KIND_CLUSTER)"
 
 ##@ Dependencies
 
