@@ -455,7 +455,18 @@ func (r *ValkeyClusterReconciler) updateStatus(ctx context.Context, cr *cachev1a
 		shardStatuses = append(shardStatuses, ss)
 	}
 
-	allReady := ready == int(cr.Spec.Shards) && state.SlotsCovered && !state.OpenSlots
+	// actualShards = slot-owning masters across the WHOLE cluster. During a
+	// scale-in, extra shards still exist (and own slots) until they're drained
+	// and removed; if we only looked at shards [0,desired) we'd falsely report
+	// Ready while those linger. Truthful status requires actualShards == desired.
+	actualShards := 0
+	for _, n := range state.Nodes {
+		if n.IsPrimary() && n.SlotCount() > 0 {
+			actualShards++
+		}
+	}
+	desired := int(cr.Spec.Shards)
+	allReady := ready == desired && actualShards == desired && state.SlotsCovered && !state.OpenSlots
 	key := types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &cachev1alpha1.ValkeyCluster{}
@@ -471,6 +482,11 @@ func (r *ValkeyClusterReconciler) updateStatus(ctx context.Context, cr *cachev1a
 			setCond(latest, cachev1alpha1.ConditionAvailable, metav1.ConditionTrue, "Ready", "all shards serving, full keyspace covered")
 			setCond(latest, cachev1alpha1.ConditionProgressing, metav1.ConditionFalse, "Ready", "converged")
 			setCond(latest, cachev1alpha1.ConditionDegraded, metav1.ConditionFalse, "Ready", "healthy")
+		case actualShards > desired && ready > 0:
+			// scale-in in progress: extra shards not yet drained/removed.
+			latest.Status.Phase = cachev1alpha1.PhaseResharding
+			setCond(latest, cachev1alpha1.ConditionProgressing, metav1.ConditionTrue, "Resharding", "removing shards")
+			setCond(latest, cachev1alpha1.ConditionAvailable, metav1.ConditionTrue, "Serving", "primaries serving during scale-in")
 		case state.OpenSlots && ready > 0:
 			// mid-migration: slots are briefly open but primaries are serving —
 			// this is progress, not degradation.
