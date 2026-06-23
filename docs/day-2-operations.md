@@ -114,4 +114,4 @@ kubectl exec demo-shard-0-0 -- valkey-cli --cluster check 127.0.0.1:6379       #
 kubectl exec demo-shard-0-0 -- valkey-cli cluster nodes                        # raw membership
 ```
 - **Stuck in `Provisioning`**: pods not Ready — check `kubectl get pods -l app.kubernetes.io/instance=demo` and pod events (image pull, scheduling, PVC binding).
-- **`Degraded`**: a shard lost its only node (`replicasPerShard: 0`) or a migration was interrupted; the operator runs `--cluster fix` and retries automatically.
+- **`Degraded`**: a shard lost its only node (`replicasPerShard: 0`) or a migration was interrupted; the operator runs `RepairSlots` (open-slot finalization) and retries automatically.

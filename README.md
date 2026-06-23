@@ -58,15 +58,53 @@ Make targets of note: `make run` (run the controller locally), `make test` (unit
 
 ## How it works
 
+**What the operator creates** (owner-referenced, so deletion garbage-collects):
+
+```mermaid
+flowchart LR
+  CR["ValkeyCluster CR<br/>shards x replicasPerShard"] -->|reconciles| OP["valkeycluster<br/>operator"]
+  OP -->|owns| CM["ConfigMap<br/>valkey.conf"]
+  OP -->|owns| SVC["Headless Service<br/>stable per-pod DNS"]
+  OP -->|owns| STS["StatefulSet per shard<br/>shard-0 ... shard-N"]
+  STS --> POD["Valkey pods, cluster mode<br/>16384 hash slots, PVC per pod"]
+  OP -.->|"CLUSTER RPCs via go-redis<br/>+ valkey-cli via pod-exec"| POD
+```
+
+**The reconcile loop** (level-triggered, idempotent — reads live state first, safe to re-run):
+
+```mermaid
+flowchart LR
+  OBS["Observe<br/>CLUSTER INFO / NODES"] --> DEC["Decide<br/>internal/topology"]
+  DEC --> ACT{"Action?"}
+  ACT -->|not formed| FORM["Form cluster"]
+  ACT -->|shards up| OUT["Scale-out<br/>targeted reshard"]
+  ACT -->|shards down| IN["Scale-in<br/>native MoveSlots + teardown"]
+  ACT -->|open slots| REP["RepairSlots"]
+  ACT -->|replicas changed| RPL["Adjust replicas"]
+  FORM --> ST["Update status<br/>phase + conditions"]
+  OUT --> ST
+  IN --> ST
+  REP --> ST
+  RPL --> ST
+  ST -.->|requeue| OBS
+```
+
 - One **StatefulSet per shard** (`<cr>-shard-<i>`), a **headless Service** for stable per-pod DNS,
   and a **ConfigMap** with the rendered `valkey.conf`. Each pod advertises its stable FQDN
   (`cluster-announce-hostname`) so gossip and client redirects survive pod restarts; `nodes.conf`
   lives on the PVC so a restarted node keeps its identity.
 - The reconciler observes the live cluster (`CLUSTER INFO`/`NODES` via go-redis), decides the next
-  action (`internal/topology`), and acts: form, repair (`--cluster fix`), reshard
-  (`valkey-cli --cluster rebalance` via pod-exec), or adjust replicas. The cluster-orchestration
-  seam (`internal/cluster.ClusterAdmin`) has a fake implementation so the reconciler is unit/envtest
-  testable without a live Valkey.
+  action (`internal/topology`), and acts:
+  - **scale-out** — join the new shard's primary and move it its fair share of slots with a
+    *targeted* reshard (never `--use-empty-masters`, which would hand slots to replica pods);
+  - **scale-in** — drain a departing shard's slots onto a survivor with a **native Go slot-mover**
+    (`SETSLOT` + `MIGRATE ... REPLACE` by IP, masters-only `SETSLOT NODE`), then forget its nodes
+    cluster-wide and delete its StatefulSet. Teardown is driven by which StatefulSets still exist,
+    not by the live primary count;
+  - **repair** — `RepairSlots` deterministically finalizes any open (importing/migrating) slots;
+  - **form / adjust replicas** for first bootstrap and HA-copy changes.
+- The cluster-orchestration seam (`internal/cluster.ClusterAdmin`) has a fake implementation so the
+  reconciler is unit/envtest testable without a live Valkey.
 
 Architecture and decisions: [specs/001-valkeycluster-operator/plan.md](specs/001-valkeycluster-operator/plan.md).
 

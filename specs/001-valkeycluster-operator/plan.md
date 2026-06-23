@@ -56,7 +56,7 @@ topology change is acceptable; in-cluster cluster-aware clients only; `shards` �
 | II. Test-First (non-negotiable) | Pure logic (slots, topology diff, status, config render) is unit-tested first; reconcile behavior via envtest with a **fake `ClusterAdmin`**; the three user stories via kind e2e. The `ClusterAdmin` interface exists specifically to make reconcile logic testable without live Valkey. | ✅ |
 | III. Simplicity & YAGNI | Only in-scope features; non-goals (vertical scaling, volume expansion, dynamic reconfigure, backup/restore, TLS/ACL, Sentinel, proxy, external access, metrics/UI) stay out. | ✅ |
 | IV. Truthful, Observable State | Status is derived every reconcile from live `CLUSTER NODES`/`CLUSTER INFO`; `Degraded` surfaced on slot gaps / primary-less shards. Monitoring is `kubectl` (printer columns + conditions). | ✅ |
-| V. Idempotent, Self-Healing Reconciliation | Every step reads actual state first; bootstrap guarded by `CLUSTER INFO`; reshard resumes via `--cluster fix`; safe under operator restarts. | ✅ |
+| V. Idempotent, Self-Healing Reconciliation | Every step reads actual state first; bootstrap guarded by `CLUSTER INFO`; reshard resumes via `RepairSlots` (open-slot finalization); safe under operator restarts. | ✅ |
 
 No violations → Complexity Tracking left empty.
 
@@ -137,9 +137,17 @@ satisfying the Test-First principle. One StatefulSet per shard is the unit of sh
 - **Bootstrap (idempotent)**: gate on all pods Ready → `CLUSTER INFO`; if not formed: `MEET` all,
   `ADDSLOTS` even split across shard-0-pod of each shard, `REPLICATE` the rest; verify full coverage.
   A single-leader guard (lock annotation / lexicographic owner) prevents concurrent `create`.
-- **Resharding**: scale-up → create shard STS → `MEET` → `valkey-cli --cluster rebalance --use-empty-masters`
-  (exec). scale-down → `rebalance --weight <id>=0` to drain → `del-node`/`FORGET` → delete STS + PVCs.
-  Always `--cluster fix` first if slots are open (FR-024 stability gate).
+- **Resharding** (implementation evolved from the initial `valkey-cli --cluster` plan after live
+  testing — the CLI's pre-check refusals, BUSYKEY, and timeouts made scale-in non-deterministic):
+  - *scale-up* → create shard STS → `MEET` → **targeted** reshard moving the new primary its fair
+    share of slots (never `--use-empty-masters`, which would also feed empty replica-pods).
+  - *scale-down* → drain each departing shard with a **native Go slot-mover** (`ClusterAdmin.MoveSlots`:
+    `SETSLOT IMPORTING/MIGRATING` → `MIGRATE … REPLACE` by IP → masters-only `SETSLOT NODE`), in
+    bounded batches; once a shard owns 0 slots, `FORGET` its nodes from every survivor and delete the
+    STS + PVCs. Departing-shard selection and teardown are driven by which StatefulSets exist, not by
+    the live primary count.
+  - *open slots* → `ClusterAdmin.RepairSlots` finalizes any importing/migrating slots deterministically
+    (handles multi-way open slots that `--cluster fix` can't) as the FR-024 stability gate.
 - **Finalizer**: ordered teardown + PVC reclaim on scale-in (FR-023).
 - **Status**: phase + conditions derived from `CLUSTER NODES`/`INFO` each reconcile.
 

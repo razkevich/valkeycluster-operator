@@ -75,12 +75,13 @@ There were two defensible layouts: one StatefulSet for the whole cluster, or **o
 
 Crucially, the operator **never assumes the primary is ordinal 0**. After a failover, any pod can be the primary, so roles are always read live from `CLUSTER NODES` / `CLUSTER MYID`.
 
-### How the operator talks to Valkey: a deliberate hybrid
+### How the operator talks to Valkey: a hybrid that evolved
 
 - **`go-redis`** for inspection and one-shot topology commands: `CLUSTER INFO`, `NODES`, `MEET`, `ADDSLOTS`, `REPLICATE`, `FORGET`, `FAILOVER`, `MYID`.
-- **`valkey-cli --cluster reshard / rebalance / fix`**, executed *inside a pod* via the Kubernetes exec API, for the slot-and-key **migration** itself.
+- **`valkey-cli --cluster reshard`** (pod-exec) for **scale-out** slot/key migration — a *targeted* reshard to specific new-primary IDs.
+- **A native Go slot-mover** (`ClusterAdmin.MoveSlots`) for **scale-in** drain, and `ClusterAdmin.RepairSlots` for open-slot finalization.
 
-Why the split? The migration loop (`SETSLOT IMPORTING/MIGRATING` → `MIGRATE` keys → `SETSLOT NODE`, with `ASK` redirects mid-flight) is fiddly and a classic source of bugs. `valkey-cli --cluster` already implements it correctly and even self-repairs interrupted migrations (`--cluster fix`). Reimplementing it in Go would be effort spent re-creating battle-tested code. Reusing it is the senior move; I documented it as a conscious choice.
+The split started simpler — *reuse `valkey-cli --cluster` for all migration; don't reimplement a fiddly `SETSLOT IMPORTING/MIGRATING` → `MIGRATE` → `SETSLOT NODE` loop in Go.* That holds for scale-out. But live testing of **scale-in** showed `valkey-cli`'s drain to be non-deterministic — pre-check refusals, `BUSYKEY`, and timeouts would wedge a shrink mid-flight. So the drain path was reimplemented natively: idempotent `MIGRATE … REPLACE` by IP, masters-only `SETSLOT NODE`, in bounded batches. The lesson is the senior move — *start by reusing battle-tested tooling, but measure it on the real path and replace it where it can't give you determinism.* (See Part 5.)
 
 ---
 
@@ -140,7 +141,7 @@ Production uses a `go-redis` + pod-exec implementation; tests use an in-memory *
 
 **Replica scaling.** Change `replicasPerShard` → the operator resizes each shard's StatefulSet and attaches/forgets replicas, no keyspace movement.
 
-**Self-healing.** Delete a StatefulSet out of band → the operator recreates it and re-forms. Interrupt the operator mid-reshard → on restart it sees the open slots, runs `--cluster fix`, and converges. No manual repair, no data loss.
+**Self-healing.** Delete a StatefulSet out of band → the operator recreates it and re-forms. Interrupt the operator mid-reshard → on restart it sees the open slots, runs `RepairSlots`, and converges. No manual repair, no data loss.
 
 ---
 
