@@ -252,7 +252,7 @@ func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha
 			have = n.SlotCount()
 		}
 		if need := perShard - have; need > 0 {
-			if err := r.Admin.Reshard(ctx, seed, id, need); err != nil {
+			if err := r.Admin.Reshard(ctx, seed, "", id, need); err != nil {
 				return fmt.Errorf("reshard into shard %d: %w", i, err)
 			}
 		}
@@ -272,21 +272,35 @@ func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha
 	return r.attachReplicas(ctx, cr, state)
 }
 
-// scaleIn drains the departing shards, forgets their nodes, and removes their workloads + PVCs.
-func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, state cluster.ClusterState, oldShards int) error {
+// scaleIn removes shards [desired, oldShards): it drains each departing shard's
+// slots onto a surviving primary with a targeted reshard (deterministic and
+// retry-safe — moving whole slots leaves no open-slot residue), then forgets the
+// shard's nodes and deletes its StatefulSet + PVCs. State is re-read each
+// iteration so the drained slot counts and current roles are always fresh.
+func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, _ cluster.ClusterState, oldShards int) error {
 	seed := r.seed(cr)
-	byHost := hostIndex(state)
-	for i := int(cr.Spec.Shards); i < oldShards; i++ {
-		primary := byHost[resources.PodFQDN(cr, i, 0)]
-		if primary.ID != "" {
-			if err := r.Admin.Rebalance(ctx, seed, cluster.RebalanceOpts{WeightZeroIDs: []string{primary.ID}}); err != nil {
+	desired := int(cr.Spec.Shards)
+	for i := desired; i < oldShards; i++ {
+		st, err := r.Admin.State(ctx, seed)
+		if err != nil {
+			return err
+		}
+		idx := byID(st)
+
+		departID, _ := r.findShardPrimary(ctx, cr, i, idx)
+		if departID != "" && idx[departID].SlotCount() > 0 {
+			survID := r.firstSurvivorPrimary(ctx, cr, idx, departID, desired)
+			if survID == "" {
+				return fmt.Errorf("no surviving primary to drain shard %d into", i)
+			}
+			if err := r.Admin.Reshard(ctx, seed, departID, survID, idx[departID].SlotCount()); err != nil {
 				return fmt.Errorf("drain shard %d: %w", i, err)
 			}
 		}
-		// forget every node belonging to this shard, then delete the workload + PVCs.
+		// forget every node of the departing shard, then delete its workload + PVCs.
 		for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
-			if n, ok := byHost[resources.PodFQDN(cr, i, j)]; ok {
-				_ = r.Admin.Forget(ctx, seed, n.ID)
+			if id, err := r.Admin.MyID(ctx, r.endpoint(cr, i, j)); err == nil && id != "" {
+				_ = r.Admin.Forget(ctx, seed, id)
 			}
 		}
 		if err := r.deleteShard(ctx, cr, i); err != nil {
@@ -294,6 +308,17 @@ func (r *ValkeyClusterReconciler) scaleIn(ctx context.Context, cr *cachev1alpha1
 		}
 	}
 	return nil
+}
+
+// firstSurvivorPrimary returns the node ID of a primary in a surviving shard
+// (index < desired) other than excludeID, to receive drained slots.
+func (r *ValkeyClusterReconciler) firstSurvivorPrimary(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, idx map[string]cluster.NodeInfo, excludeID string, desired int) string {
+	for s := 0; s < desired; s++ {
+		if id, _ := r.findShardPrimary(ctx, cr, s, idx); id != "" && id != excludeID {
+			return id
+		}
+	}
+	return ""
 }
 
 // attachReplicas ensures each non-primary pod replicates its shard's current

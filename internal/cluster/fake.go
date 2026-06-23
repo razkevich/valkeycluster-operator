@@ -179,28 +179,48 @@ func (f *Fake) Rebalance(_ context.Context, _ Endpoint, opts RebalanceOpts) erro
 	return nil
 }
 
-// Reshard (fake) makes toNodeID a slot-owning primary and re-splits the keyspace
-// evenly across all slot-owning primaries (the fake ignores the exact count n).
-func (f *Fake) Reshard(_ context.Context, _ Endpoint, toNodeID string, _ int) error {
+// Reshard (fake) moves n slots to toNodeID. With fromNodeID set, slots come from
+// that node; otherwise the keyspace is re-split evenly across slot-owning
+// primaries (used by scale-out). The fake tracks slot counts, not exact ranges.
+func (f *Fake) Reshard(_ context.Context, _ Endpoint, fromNodeID, toNodeID string, n int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if n, ok := f.nodes[toNodeID]; ok {
-		n.MasterID = ""
-		n.Flags = []string{"master"}
-		if n.SlotCount() == 0 {
-			n.Slots = []SlotRange{{Start: 0, End: 0}} // mark as owning, re-split below
+	to, ok := f.nodes[toNodeID]
+	if !ok {
+		return nil
+	}
+	to.MasterID = ""
+	to.Flags = []string{"master"}
+
+	if fromNodeID != "" {
+		// move up to n slots from the named source to the target
+		from, ok := f.nodes[fromNodeID]
+		if !ok {
+			return nil
 		}
+		moved := n
+		if c := from.SlotCount(); c < moved {
+			moved = c
+		}
+		from.Slots = countToRanges(from.SlotCount() - moved)
+		to.Slots = countToRanges(to.SlotCount() + moved)
+		return nil
+	}
+
+	// fromNodeID == "" : even re-split across all slot-owning primaries (+ target)
+	if to.SlotCount() == 0 {
+		to.Slots = []SlotRange{{Start: 0, End: 0}}
 	}
 	owners := []string{}
-	for id, n := range f.nodes {
-		if n.IsPrimary() && n.SlotCount() > 0 {
+	for id, nd := range f.nodes {
+		if nd.IsPrimary() && nd.SlotCount() > 0 {
 			owners = append(owners, id)
 		}
 	}
 	sort.Strings(owners)
-	for _, n := range f.nodes {
-		if n.IsPrimary() {
-			n.Slots = nil
+	for _, nd := range f.nodes {
+		if nd.IsPrimary() {
+			nd.Slots = nil
 		}
 	}
 	k := len(owners)
@@ -208,6 +228,15 @@ func (f *Fake) Reshard(_ context.Context, _ Endpoint, toNodeID string, _ int) er
 		f.nodes[id].Slots = []SlotRange{{Start: i * TotalSlots / k, End: (i+1)*TotalSlots/k - 1}}
 	}
 	return nil
+}
+
+// countToRanges encodes a slot count as a single synthetic range (the fake only
+// cares about counts/ownership, not exact slot identity).
+func countToRanges(count int) []SlotRange {
+	if count <= 0 {
+		return nil
+	}
+	return []SlotRange{{Start: 0, End: count - 1}}
 }
 
 // Fix ensures full coverage by rebalancing across current primaries.
