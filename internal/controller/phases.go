@@ -159,8 +159,12 @@ func (r *ValkeyClusterReconciler) reconcileCluster(ctx context.Context, cr *cach
 	case topology.ActionRepair:
 		l.Info("repairing open slots before proceeding")
 		_ = r.setPhase(ctx, cr, cachev1alpha1.PhaseResharding, "Repairing", "fixing open slots")
+		// Best-effort: `valkey-cli --cluster fix` resolves the open slot but may
+		// exit non-zero on a transient MIGRATE IOERR even though it made progress.
+		// Don't fail the reconcile — re-observe on the next pass and converge. One
+		// fix attempt per reconcile (paced by requeue) avoids hammering the cluster.
 		if err := r.Admin.Fix(ctx, seed); err != nil {
-			return err
+			l.Info("cluster fix reported an error (will re-check next reconcile)", "err", err.Error())
 		}
 	case topology.ActionScaleOutShards:
 		l.Info("scaling out shards", "add", plan.AddShards)
@@ -434,7 +438,7 @@ func (r *ValkeyClusterReconciler) updateStatus(ctx context.Context, cr *cachev1a
 		shardStatuses = append(shardStatuses, ss)
 	}
 
-	allReady := ready == int(cr.Spec.Shards) && state.SlotsCovered
+	allReady := ready == int(cr.Spec.Shards) && state.SlotsCovered && !state.OpenSlots
 	key := types.NamespacedName{Name: cr.Name, Namespace: cr.Namespace}
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &cachev1alpha1.ValkeyCluster{}
@@ -450,6 +454,12 @@ func (r *ValkeyClusterReconciler) updateStatus(ctx context.Context, cr *cachev1a
 			setCond(latest, cachev1alpha1.ConditionAvailable, metav1.ConditionTrue, "Ready", "all shards serving, full keyspace covered")
 			setCond(latest, cachev1alpha1.ConditionProgressing, metav1.ConditionFalse, "Ready", "converged")
 			setCond(latest, cachev1alpha1.ConditionDegraded, metav1.ConditionFalse, "Ready", "healthy")
+		case state.OpenSlots && ready > 0:
+			// mid-migration: slots are briefly open but primaries are serving —
+			// this is progress, not degradation.
+			latest.Status.Phase = cachev1alpha1.PhaseResharding
+			setCond(latest, cachev1alpha1.ConditionProgressing, metav1.ConditionTrue, "Resharding", "slot migration in progress")
+			setCond(latest, cachev1alpha1.ConditionAvailable, metav1.ConditionTrue, "Serving", "primaries serving during migration")
 		case ready == 0:
 			latest.Status.Phase = cachev1alpha1.PhaseDegraded
 			setCond(latest, cachev1alpha1.ConditionAvailable, metav1.ConditionFalse, "NoPrimaries", "no shard has a reachable primary")
@@ -536,8 +546,11 @@ func summarize(cr *cachev1alpha1.ValkeyCluster, state cluster.ClusterState) topo
 		}
 	}
 	return topology.Observed{
-		Formed:        state.Formed,
-		SlotsCovered:  state.SlotsCovered,
+		Formed: state.Formed,
+		// An open slot keeps coverage looking complete but leaves the cluster
+		// unstable; treat it as "not covered" so the repair gate fires before any
+		// topology change (reshard/rebalance refuse on an open-slot cluster).
+		SlotsCovered:  state.SlotsCovered && !state.OpenSlots,
 		PrimaryCount:  primaries,
 		ReplicaCounts: counts,
 	}

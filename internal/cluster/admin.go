@@ -91,7 +91,11 @@ func (n NodeInfo) SlotCount() int {
 type ClusterState struct {
 	Formed       bool
 	SlotsCovered bool
-	Nodes        []NodeInfo
+	// OpenSlots is true when any slot is mid-migration (importing/migrating) —
+	// a slot is still "assigned" so coverage looks fine, but the cluster is not
+	// in a stable state and reshard/rebalance will refuse until it's fixed.
+	OpenSlots bool
+	Nodes     []NodeInfo
 }
 
 // PrimaryByNodeID returns the primary node with the given ID, if present.

@@ -69,6 +69,7 @@ func (a *Admin) State(ctx context.Context, seed Endpoint) (ClusterState, error) 
 	return ClusterState{
 		Formed:       kv["cluster_state"] != "" && assigned > 0,
 		SlotsCovered: kv["cluster_state"] == "ok" && assigned == TotalSlots,
+		OpenSlots:    hasOpenSlots(nodesRaw),
 		Nodes:        nodes,
 	}, nil
 }
@@ -172,6 +173,13 @@ func (a *Admin) Fix(ctx context.Context, seed Endpoint) error {
 	args := []string{"valkey-cli", "--cluster", "fix", fmt.Sprintf("127.0.0.1:%d", seed.Port), "--cluster-yes"}
 	_, err := a.exec.Exec(ctx, seed.Namespace, seed.PodName, a.container, args)
 	return err
+}
+
+// hasOpenSlots reports whether CLUSTER NODES shows any slot mid-migration.
+// Migrating slots appear as [slot->-nodeid] and importing as [slot-<-nodeid];
+// the "->-" / "-<-" substrings are reliable markers.
+func hasOpenSlots(nodesRaw string) bool {
+	return strings.Contains(nodesRaw, "->-") || strings.Contains(nodesRaw, "-<-")
 }
 
 // parseInfo parses CLUSTER INFO "key:value" lines.

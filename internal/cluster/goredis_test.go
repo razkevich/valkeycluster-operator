@@ -35,6 +35,21 @@ func TestParseNodes(t *testing.T) {
 	}
 }
 
+func TestHasOpenSlots(t *testing.T) {
+	stable := "a1 10.0.0.1:6379@16379 master - 0 0 1 connected 0-5460"
+	if hasOpenSlots(stable) {
+		t.Error("stable cluster reported open slots")
+	}
+	migrating := stable + " [5461->-b2deadbeef]"
+	if !hasOpenSlots(migrating) {
+		t.Error("migrating slot not detected")
+	}
+	importing := stable + " [5461-<-b2deadbeef]"
+	if !hasOpenSlots(importing) {
+		t.Error("importing slot not detected")
+	}
+}
+
 func TestParseAddrPrefersHostname(t *testing.T) {
 	host, port := parseAddr("10.0.0.1:6379@16379,demo-shard-0-0.demo-nodes.ns.svc")
 	if host != "demo-shard-0-0.demo-nodes.ns.svc" || port != 6379 {
