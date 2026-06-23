@@ -311,11 +311,24 @@ func (a *Admin) Fix(ctx context.Context, seed Endpoint) error {
 func (a *Admin) collectOpenSlots(ctx context.Context, nodes []NodeInfo) []int {
 	seen := map[int]bool{}
 	for _, n := range nodes {
+		// Skip nodes we can't reach. A fail/disconnected node — e.g. a departed pod
+		// still lingering in gossip before it's forgotten — would otherwise stall
+		// this sweep (and every reconcile that observes state) on dial timeouts.
+		// Open-slot markers only matter on a live owning node.
+		if !n.Connected || n.HasFlag("fail") || n.HasFlag("fail?") || n.HasFlag("noaddr") {
+			continue
+		}
 		addr := n.IP
 		if addr == "" {
 			addr = n.Host
 		}
-		cn := goredis.NewClient(&goredis.Options{Addr: fmt.Sprintf("%s:%d", addr, n.Port)})
+		// Bound every dial so one slow/dead node can't block the loop.
+		cn := goredis.NewClient(&goredis.Options{
+			Addr:        fmt.Sprintf("%s:%d", addr, n.Port),
+			DialTimeout: 2 * time.Second,
+			ReadTimeout: 2 * time.Second,
+			MaxRetries:  -1,
+		})
 		raw, err := cn.ClusterNodes(ctx).Result()
 		_ = cn.Close()
 		if err != nil {
