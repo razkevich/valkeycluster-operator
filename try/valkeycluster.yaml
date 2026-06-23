@@ -1,0 +1,30 @@
+apiVersion: cache.razkevich.dev/v1alpha1
+kind: ValkeyCluster
+metadata:
+  name: try
+  namespace: default
+spec:
+  # Topology: 3 data shards (primaries), 1 HA replica each => 6 pods.
+  # shards must be 1 (HA-only) or >= 3 (cluster needs a 3-primary failover quorum).
+  shards: 3
+  replicasPerShard: 1
+
+  image: valkey/valkey:8
+
+  storage:
+    size: 512Mi
+    # storageClassName: ""   # "" uses the cluster default StorageClass (kind has one)
+
+  # Per-pod compute. A memory limit makes the operator set maxmemory at ~70% of it
+  # (headroom for RDB/AOF copy-on-write forks) with a noeviction policy.
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits:   { cpu: "1",  memory: 256Mi }
+
+  # Clustering / HA tuning (all optional; sane defaults shown). See
+  # docs/clustering-ha-tradeoffs.md for what each dial trades.
+  haPolicy:
+    minReplicasToWrite: 0        # >=1 refuses writes unless a replica is in sync (durability vs availability)
+    requireFullCoverage: true    # serve only when all slots covered (correctness vs availability)
+    appendFsync: everysec        # always | everysec | no (durability vs throughput)
+    clusterNodeTimeoutMillis: 5000  # failover speed vs false positives
