@@ -10,7 +10,7 @@
 
 ## Overview
 
-A Kubernetes operator that lets users run and operate a **Valkey cluster** declaratively. The user states the *desired topology* — how many shards (data partitions) and how many replicas per shard (high-availability copies) — in a single custom resource, and the operator continuously reconciles the running cluster to match that intent. The operator covers the cluster's full life cycle: initial provisioning, automatic recovery from node failure, and changing the topology over time without losing data.
+A Kubernetes operator that lets users run and operate a **Valkey cluster** declaratively. The user states the *desired topology* — how many shards (data partitions) and how many replicas per shard (high-availability copies) — in a single custom resource, and the operator continuously reconciles the running cluster to match that intent. The operator covers the cluster's full life cycle: initial provisioning, automatic recovery from node failure, and changing the topology over time without losing data. Editing a `ValkeyCluster` after creation — changing `shards` or `replicasPerShard` and re-applying — is a first-class operation: the operator reconciles the live cluster to the new topology (see User Story 3).
 
 The defining behaviors are **sharding** (the keyspace is partitioned across shards so capacity and write throughput scale horizontally), **replication** (each shard keeps HA copies so the loss of a node does not lose data or availability), and **resharding** (the keyspace is redistributed when the shard count changes, preserving existing data).
 
@@ -29,7 +29,8 @@ A platform user wants a running Valkey cluster of a specific shape. They create 
 1. **Given** no existing cluster, **When** a user creates a `ValkeyCluster` with `shards: 3, replicasPerShard: 1`, **Then** the operator brings up 6 nodes, forms one cluster covering 100% of the keyspace, and the resource reports `Ready`.
 2. **Given** a `Ready` cluster, **When** a client writes keys spanning multiple shards and reads them back, **Then** all values are returned correctly.
 3. **Given** a `ValkeyCluster` with `shards: 1, replicasPerShard: 2`, **When** it is created, **Then** the operator provisions one primary holding the full keyspace plus 2 replicas (the replication / HA-only configuration).
-4. **Given** a `Ready` cluster, **When** the user deletes the `ValkeyCluster` resource, **Then** all nodes, storage, and supporting resources it created are removed.
+4. **Given** a `ValkeyCluster` with `shards: 3, replicasPerShard: 2` (multiple shards *and* multiple replicas — 9 nodes), **When** it is created, **Then** the operator forms 3 shards, each a primary plus 2 replicas, covering 100% of the keyspace, and reports `Ready`.
+5. **Given** a `Ready` cluster, **When** the user deletes the `ValkeyCluster` resource, **Then** all nodes, storage, and supporting resources it created are removed.
 
 ---
 
@@ -112,16 +113,20 @@ A user's needs change and they edit the topology — most importantly the number
 
 **Verification (test suite & benchmark)**
 - **FR-020**: The project MUST include an automated test suite that verifies provisioning, failover, and data-preserving resharding (the three user stories) as day-two operations.
-- **FR-021**: The project MUST include a repeatable benchmark that measures cluster performance and demonstrates the clustering/HA trade-offs (at minimum: write throughput as a function of shard count, and the availability/latency impact of a failover).
-- **FR-022**: The project MUST include documentation for day-two operations (scaling/resharding, observing failover, reading status) and a discussion of the clustering vs. HA performance trade-offs.
+- **FR-021**: The project MUST include a repeatable benchmark that measures cluster performance and demonstrates the clustering/HA trade-offs across at least: (a) write throughput vs. shard count (sharding scale-out), (b) the availability/latency impact of a failover, (c) latency-vs-durability of acknowledged writes (plain writes vs. `WAIT`/`minReplicasToWrite`), and (d) the throughput impact of `appendFsync` durability levels.
+- **FR-022**: The project MUST include documentation for day-two operations (scaling/resharding, observing failover, reading status) and a written analysis of the clustering/HA performance trade-offs — covering sharding vs. replication (capacity/throughput vs. availability), the asynchronous-replication data-loss window on failover, why a cluster needs ≥3 shards (failover quorum), each `haPolicy` knob and when to change it, and replica-vs-primary placement (anti-affinity).
 
 **Membership safety (working-cluster essentials)**
 - **FR-023**: When a node is removed (shard scale-down or replica reduction), the system MUST remove it from cluster membership and reclaim its persistent storage, so that stale identity/membership state cannot later resurrect and corrupt the cluster if a like-named node is created afterward.
 - **FR-024**: The system MUST NOT begin a topology change while the cluster has open or uncovered slots (e.g., a previous migration was interrupted); it MUST first repair the cluster to full keyspace coverage, then proceed.
 
+**HA & consistency policy and scheduling**
+- **FR-025**: Users MUST be able to tune a cluster's HA/consistency policy via an optional `haPolicy`, with at least: `minReplicasToWrite` (refuse writes unless this many replicas are in-sync — durability vs. write-availability), `requireFullCoverage` (whether the cluster serves its reachable slots when some are unavailable — availability vs. correctness), `appendFsync` (fsync cadence: `always`/`everysec`/`no` — durability vs. throughput), and `clusterNodeTimeout` (failure-detection window — failover speed vs. false positives). Each field has a sensible default when unset.
+- **FR-026**: The system MUST place each shard's replicas to avoid co-location with that shard's primary, spreading a shard's nodes across distinct Kubernetes nodes on a best-effort basis, so that the loss of a single node does not take down an entire shard.
+
 ### Key Entities *(include if feature involves data)*
 
-- **ValkeyCluster**: The user's declaration of a desired cluster. Key attributes: `shards`, `replicasPerShard`, image, per-node storage size. Carries observed status (phase, conditions, per-shard observed state).
+- **ValkeyCluster**: The user's declaration of a desired cluster. Key attributes: `shards`, `replicasPerShard`, image, per-node storage size, and an optional `haPolicy` (durability/availability/failover knobs). Carries observed status (phase, conditions, per-shard observed state).
 - **Shard**: One data partition of the cluster. Owns a contiguous portion of the keyspace and consists of one primary plus its replicas. The unit that sharding and resharding operate on.
 - **Node (cluster member)**: A single Valkey process participating in the cluster, acting as either a primary or a replica of some shard. Roles can change over time (e.g., after failover); the operator never assumes a fixed role.
 - **Keyspace partition (hash slots)**: The full key space is divided into a fixed number of slots distributed across shards; "serving 100% of the keyspace" means every slot is owned by a reachable primary.
@@ -137,6 +142,7 @@ A user's needs change and they edit the topology — most importantly the number
 - **SC-005**: The status shown for a cluster matches its real state (phase, per-shard primary, served keyspace) on every reconciliation, so an operator can trust `status` without inspecting nodes directly.
 - **SC-006**: The benchmark demonstrates a measurable increase in aggregate write throughput as shard count increases (e.g., a 3-shard cluster outperforms a 1-shard cluster on a write-heavy workload), quantifying the sharding trade-off.
 - **SC-007**: Restarting or rescheduling any node (with its storage intact) results in that node rejoining the same cluster under its original identity — with no split, no duplicate membership, no manual intervention, and no data loss.
+- **SC-008**: The benchmark quantifies at least one durability/availability trade-off knob's effect (e.g., write latency rises measurably when acknowledgment from replicas is required), making the cost of stronger durability explicit.
 
 ## Assumptions
 
