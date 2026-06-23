@@ -27,7 +27,8 @@ directly. Reproduce with [quickstart.md](../specs/001-valkeycluster-operator/qui
 ## US3 — Data-preserving resharding ✅
 - Seeded 200 keys, then `kubectl patch ... '{"spec":{"shards":5}}'`.
 - CR passed through `Resharding` and returned to `Ready` with `readyShards=5`.
-- `valkey-cli --cluster check`: **5 primaries, all 16384 slots covered**, each shard with its replica.
+- `valkey-cli --cluster check`: **exactly 5 primaries, all 16384 slots covered**; every
+  shard reports `readyReplicas=1` (primaries `shard-0-0`..`shard-4-0`).
 - **Data preserved: read back 200/200** keys after resharding.
 
 ## Notes
