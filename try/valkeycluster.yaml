@@ -4,49 +4,21 @@ metadata:
   name: try
   namespace: default
 spec:
-  # ─── Topology ─────────────────────────────────────────────────────────────
-  # 3 data shards (primaries), 2 HA replicas each => 9 pods.
-  # shards must be 1 (HA-only) or >= 3 (cluster needs a 3-primary failover quorum).
-  # Edit shards/replicasPerShard and re-apply to reshard / scale replicas live.
   shards: 3
   replicasPerShard: 2
-
   image: valkey/valkey:8
-
-  # ─── Storage (per-pod PVC; node identity + data survive restarts) ──────────
   storage:
     size: 1Gi
-    # storageClassName: ""        # "" = cluster default StorageClass
-
-  # ─── Compute (a memory limit makes the operator set maxmemory ~70% of it,
-  #     leaving headroom for RDB/AOF copy-on-write forks => no OOMKill) ────────
   resources:
     requests: { cpu: 200m, memory: 256Mi }
-    limits:   { cpu: "1",  memory: 512Mi }
-
-  # ─── Persistence: durability vs. performance (RDB vs. AOF) ──────────────────
+    limits: { cpu: "1", memory: 512Mi }
   persistence:
-    mode: AOFAndRDB        # AOF | RDB | AOFAndRDB | None
-                           #   AOF       = better durability (replay write log)
-                           #   RDB       = compact snapshots, fast restart, lose-since-snapshot
-                           #   AOFAndRDB = both (durability + fast restart)
-                           #   None      = pure cache, fastest, no disk durability
-    appendFsync: everysec  # always (safest/slowest) | everysec (≤1s loss) | no (fastest)
-
-  # ─── Performance: throughput / memory tuning ───────────────────────────────
+    mode: AOFAndRDB
+    appendFsync: everysec
   performance:
-    ioThreads: 2           # Valkey-8 network I/O threads (exec stays single-threaded);
-                           #   raise on multi-core nodes for more throughput
+    ioThreads: 2
     maxmemoryPolicy: noeviction
-                           #   noeviction      = reject writes at maxmemory (datastore-correct)
-                           #   allkeys-lru/lfu = evict (cache); LFU wins on skewed/hot-key access
-                           #   volatile-*      = evict only keys with a TTL
-
-  # ─── HA / consistency dials: availability vs. durability vs. correctness ────
   haPolicy:
-    minReplicasToWrite: 1        # refuse writes unless >=1 replica is in sync
-                                 #   (durability ↑, write-availability ↓)
-    requireFullCoverage: true    # serve only when all 16384 slots are covered
-                                 #   true = correctness; false = stay up on partial outage
-    clusterNodeTimeoutMillis: 5000  # failure-detection window
-                                    #   lower = faster failover, more false positives
+    minReplicasToWrite: 1
+    requireFullCoverage: true
+    clusterNodeTimeoutMillis: 5000
