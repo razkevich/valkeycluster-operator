@@ -137,8 +137,7 @@ satisfying the Test-First principle. One StatefulSet per shard is the unit of sh
 - **Bootstrap (idempotent)**: gate on all pods Ready → `CLUSTER INFO`; if not formed: `MEET` all,
   `ADDSLOTS` even split across shard-0-pod of each shard, `REPLICATE` the rest; verify full coverage.
   A single-leader guard (lock annotation / lexicographic owner) prevents concurrent `create`.
-- **Resharding** (implementation evolved from the initial `valkey-cli --cluster` plan after live
-  testing — the CLI's pre-check refusals, BUSYKEY, and timeouts made scale-in non-deterministic):
+- **Resharding**:
   - *scale-up* → create shard STS → `MEET` → **targeted** reshard moving the new primary its fair
     share of slots (never `--use-empty-masters`, which would also feed empty replica-pods).
   - *scale-down* → drain each departing shard with a **native Go slot-mover** (`ClusterAdmin.MoveSlots`:
@@ -147,7 +146,7 @@ satisfying the Test-First principle. One StatefulSet per shard is the unit of sh
     STS + PVCs. Departing-shard selection and teardown are driven by which StatefulSets exist, not by
     the live primary count.
   - *open slots* → `ClusterAdmin.RepairSlots` finalizes any importing/migrating slots deterministically
-    (handles multi-way open slots that `--cluster fix` can't) as the FR-024 stability gate.
+    (handles multi-way open slots) as the FR-024 stability gate.
 - **Finalizer**: ordered teardown + PVC reclaim on scale-in (FR-023).
 - **Status**: phase + conditions derived from `CLUSTER NODES`/`INFO` each reconcile.
 
