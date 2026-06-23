@@ -32,12 +32,18 @@ directly. Reproduce with [quickstart.md](../specs/001-valkeycluster-operator/qui
 - **Data preserved: read back 200/200** keys after resharding.
 
 ## Notes
-- Two real bugs were found and fixed during this verification (see commit history): `CLUSTER MEET`
-  requires an IP (resolve FQDN → IP; nodes still announce hostname), and scale-out had to use a
-  **targeted** reshard to the new primary's node ID (not `rebalance --use-empty-masters`) so replicas
-  don't become spurious primaries.
-- These flows are now also covered by an **automated Ginkgo e2e suite** in
+- Two Valkey-on-Kubernetes details the operator handles: `CLUSTER MEET` requires an IP (it resolves
+  FQDN → IP while nodes still announce their hostname), and scale-out uses a **targeted** reshard to
+  the new primary's node ID (not `rebalance --use-empty-masters`) so replica pods don't become
+  spurious primaries.
+- These flows are also covered by an **automated Ginkgo e2e suite** in
   `test/e2e/valkeycluster_test.go` (provision+use, failover, reshard 3→5, scale-in 5→3, replica
-  scaling), which passes against a real Valkey cluster on Kind. Run it with:
-  `CERT_MANAGER_INSTALL_SKIP=true KIND_CLUSTER=valkeycluster-dev go test -tags e2e ./test/e2e/ -timeout 1800s -args -ginkgo.focus="ValkeyCluster lifecycle"`.
+  scaling), which passes against a real Valkey cluster on Kind. Run it with `make test-e2e`
+  (spins its own kind cluster; set `CERT_MANAGER_INSTALL_SKIP=true` — the operator has no webhooks).
   The reconcile decision logic is additionally covered by envtest with a fake cluster.
+
+  Latest full run: `SUCCESS! 7 Passed | 0 Failed` in ~301s (provision 54s, failover 7s, reshard
+  3→5 95s, replica scaling <1s, scale-in 5→3 76s, plus the manager/metrics smoke specs).
+- For a quick, human-readable smoke test against an **already-running** cluster, `bench/day2-matrix.sh`
+  drives provision → scale-out 5 → scale-in 3 and reports read/write hit counts at every pivot
+  (including live writes mid-reshard).

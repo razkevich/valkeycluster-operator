@@ -115,6 +115,10 @@ Built spec-first with **GitHub Spec Kit**. The full trail is in the repo:
 → `contracts/` → `tasks.md` → implementation. Tests are written alongside the code per the
 constitution's test-first principle (unit + controller envtest + kind e2e).
 
+This was built with an AI coding agent under that structure — the spec-driven loop, the test seam,
+and verification against a real cluster are written up in
+[docs/ai-development.md](docs/ai-development.md).
+
 ## Project layout
 
 ```
