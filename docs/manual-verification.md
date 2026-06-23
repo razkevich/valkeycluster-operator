@@ -2,7 +2,7 @@
 
 Record of end-to-end verification against a real 3-node `kind` cluster
 (`valkeycluster-dev`), exercising the three user stories and **using the Valkey instances**
-directly. Reproduce with [quickstart.md](../specs/001-valkeycluster-operator/quickstart.md).
+directly. Reproduce with [quickstart.md](https://github.com/razkevich/valkeycluster-operator/blob/main/specs/001-valkeycluster-operator/quickstart.md).
 
 ## Setup
 - Operator built and deployed via `make kind-deploy IMG=valkeycluster-operator:dev`.

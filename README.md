@@ -1,5 +1,7 @@
 # ValkeyCluster Operator
 
+📖 **Documentation site:** <https://razkevich.github.io/valkeycluster-operator/>
+
 A Kubernetes operator that manages a **Valkey Cluster** (cluster mode) declaratively. You describe
 the desired topology — how many shards and how many replicas per shard — in a single `ValkeyCluster`
 custom resource, and the operator reconciles a real, sharded, highly-available Valkey cluster to

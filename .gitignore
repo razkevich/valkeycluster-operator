@@ -37,3 +37,6 @@ go.work
 
 # Serena MCP local cache
 .serena/
+
+# MkDocs build output
+site/
