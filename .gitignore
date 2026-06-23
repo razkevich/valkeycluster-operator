@@ -31,3 +31,6 @@ go.work
 
 # Local agent credentials/settings (keep skills & commands tracked)
 .claude/settings.local.json
+
+# JetBrains IDE
+.idea/
