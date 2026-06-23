@@ -11,10 +11,13 @@ API group/version: `cache.razkevich.dev/v1alpha1`. Kind: `ValkeyCluster` (namesp
 | `image` | string | `valkey/valkey:8` | non-empty | Valkey image (must include `valkey-cli`) |
 | `storage.size` | quantity | `1Gi` | required; **immutable** after create | per-pod PVC size |
 | `storage.storageClassName` | string | `""` (cluster default) | optional | |
-| `resources` | corev1.ResourceRequirements | `{}` | optional | passed to the valkey container |
+| `resources` | corev1.ResourceRequirements | `{}` | optional | passed to the valkey container; a memory limit drives `maxmemory` at ~70% |
+| `persistence.mode` | enum | `AOF` | `AOF\|RDB\|AOFAndRDB\|None` | drives `appendonly` + `save` |
+| `persistence.appendFsync` | enum | `everysec` | `always\|everysec\|no` | `appendfsync` (AOF only) |
+| `performance.ioThreads` | int32 | 1 | `1..128` | `io-threads` (Valkey-8 network parallelism) |
+| `performance.maxmemoryPolicy` | enum | `noeviction` | `noeviction\|allkeys-lru\|allkeys-lfu\|allkeys-random\|volatile-lru\|volatile-lfu\|volatile-random\|volatile-ttl` | `maxmemory-policy` |
 | `haPolicy.minReplicasToWrite` | int32 | 0 | `>= 0` | `min-replicas-to-write` |
 | `haPolicy.requireFullCoverage` | bool | true | — | `cluster-require-full-coverage` |
-| `haPolicy.appendFsync` | enum | `everysec` | `always\|everysec\|no` | `appendfsync` |
 | `haPolicy.clusterNodeTimeoutMillis` | int32 | 5000 | `>= 1000` | `cluster-node-timeout` |
 
 Validation expressed via kubebuilder markers + CEL (`x-kubernetes-validations`) for the

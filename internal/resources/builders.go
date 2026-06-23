@@ -89,14 +89,23 @@ func RenderValkeyConf(cr *cachev1alpha1.ValkeyCluster) string {
 	if hp.RequireFullCoverage != nil && !*hp.RequireFullCoverage {
 		fullCoverage = "no"
 	}
-	fsync := string(hp.AppendFsync)
-	if fsync == "" {
-		fsync = "everysec"
-	}
 	timeout := hp.ClusterNodeTimeoutMillis
 	if timeout == 0 {
 		timeout = 5000
 	}
+
+	// Persistence: AOF (default) / RDB / AOFAndRDB / None.
+	mode := cr.Spec.Persistence.Mode
+	if mode == "" {
+		mode = cachev1alpha1.PersistenceAOF
+	}
+	fsync := string(cr.Spec.Persistence.AppendFsync)
+	if fsync == "" {
+		fsync = "everysec"
+	}
+	aofOn := mode == cachev1alpha1.PersistenceAOF || mode == cachev1alpha1.PersistenceAOFAndRDB
+	rdbOn := mode == cachev1alpha1.PersistenceRDB || mode == cachev1alpha1.PersistenceAOFAndRDB
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "cluster-enabled yes\n")
 	fmt.Fprintf(&b, "cluster-config-file %s/nodes.conf\n", dataMount)
@@ -105,11 +114,32 @@ func RenderValkeyConf(cr *cachev1alpha1.ValkeyCluster) string {
 	fmt.Fprintf(&b, "cluster-preferred-endpoint-type hostname\n")
 	fmt.Fprintf(&b, "cluster-port %d\n", busPort)
 	fmt.Fprintf(&b, "port %d\n", clientPort)
-	fmt.Fprintf(&b, "appendonly yes\n")
-	fmt.Fprintf(&b, "appendfsync %s\n", fsync)
 	fmt.Fprintf(&b, "min-replicas-to-write %d\n", hp.MinReplicasToWrite)
 	fmt.Fprintf(&b, "dir %s\n", dataMount)
-	fmt.Fprintf(&b, "save \"\"\n")
+	// Performance: io-threads (network parallelism) and eviction policy.
+	ioThreads := cr.Spec.Performance.IOThreads
+	if ioThreads < 1 {
+		ioThreads = 1
+	}
+	fmt.Fprintf(&b, "io-threads %d\n", ioThreads)
+	policy := string(cr.Spec.Performance.MaxmemoryPolicy)
+	if policy == "" {
+		policy = "noeviction"
+	}
+	fmt.Fprintf(&b, "maxmemory-policy %s\n", policy)
+	// AOF
+	if aofOn {
+		fmt.Fprintf(&b, "appendonly yes\n")
+		fmt.Fprintf(&b, "appendfsync %s\n", fsync)
+	} else {
+		fmt.Fprintf(&b, "appendonly no\n")
+	}
+	// RDB snapshots: a sane schedule when enabled, disabled otherwise.
+	if rdbOn {
+		fmt.Fprintf(&b, "save 3600 1 300 100 60 10000\n")
+	} else {
+		fmt.Fprintf(&b, "save \"\"\n")
+	}
 	// Keep maxmemory below the container memory limit so RDB/AOF copy-on-write
 	// forks and client/replication buffers don't trigger an OOMKill. We reserve
 	// ~30% headroom. Datastore-safe policy (reject writes rather than silently
@@ -117,7 +147,6 @@ func RenderValkeyConf(cr *cachev1alpha1.ValkeyCluster) string {
 	if lim, ok := cr.Spec.Resources.Limits[corev1.ResourceMemory]; ok && !lim.IsZero() {
 		maxBytes := lim.Value() * 70 / 100
 		fmt.Fprintf(&b, "maxmemory %d\n", maxBytes)
-		fmt.Fprintf(&b, "maxmemory-policy noeviction\n")
 	}
 	return b.String()
 }

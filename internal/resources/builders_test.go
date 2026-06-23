@@ -96,8 +96,11 @@ func TestRenderValkeyConf(t *testing.T) {
 	cr.Spec.HAPolicy = cachev1alpha1.HAPolicy{
 		MinReplicasToWrite:       2,
 		RequireFullCoverage:      &fc,
-		AppendFsync:              cachev1alpha1.AppendFsyncAlways,
 		ClusterNodeTimeoutMillis: 8000,
+	}
+	cr.Spec.Persistence = cachev1alpha1.PersistenceSpec{
+		Mode:        cachev1alpha1.PersistenceAOF,
+		AppendFsync: cachev1alpha1.AppendFsyncAlways,
 	}
 	conf := RenderValkeyConf(cr)
 	wants := []string{
@@ -107,6 +110,7 @@ func TestRenderValkeyConf(t *testing.T) {
 		"cluster-require-full-coverage no",
 		"cluster-preferred-endpoint-type hostname",
 		"cluster-port 16379",
+		"appendonly yes",
 		"appendfsync always",
 		"min-replicas-to-write 2",
 	}
@@ -137,11 +141,45 @@ func TestRenderValkeyConfNoMaxMemoryWithoutLimit(t *testing.T) {
 }
 
 func TestRenderValkeyConfDefaults(t *testing.T) {
-	// zero-value HAPolicy should still render sane defaults
+	// zero-value spec should render sane defaults (AOF on, everysec, RDB off)
 	conf := RenderValkeyConf(testCR())
-	for _, w := range []string{"cluster-require-full-coverage yes", "appendfsync everysec", "cluster-node-timeout 5000", "min-replicas-to-write 0"} {
+	for _, w := range []string{"cluster-require-full-coverage yes", "appendonly yes", "appendfsync everysec", "cluster-node-timeout 5000", "min-replicas-to-write 0", "save \"\"", "io-threads 1", "maxmemory-policy noeviction"} {
 		if !strings.Contains(conf, w) {
 			t.Errorf("default conf missing %q\n---\n%s", w, conf)
+		}
+	}
+}
+
+func TestRenderValkeyConfPerformance(t *testing.T) {
+	cr := testCR()
+	cr.Spec.Performance = cachev1alpha1.PerformanceSpec{IOThreads: 4, MaxmemoryPolicy: "allkeys-lfu"}
+	conf := RenderValkeyConf(cr)
+	for _, w := range []string{"io-threads 4", "maxmemory-policy allkeys-lfu"} {
+		if !strings.Contains(conf, w) {
+			t.Errorf("missing %q\n---\n%s", w, conf)
+		}
+	}
+}
+
+func TestRenderValkeyConfPersistenceModes(t *testing.T) {
+	cases := map[cachev1alpha1.PersistenceMode]struct{ wants, absent []string }{
+		cachev1alpha1.PersistenceRDB:       {wants: []string{"appendonly no", "save 3600 1 300 100 60 10000"}, absent: []string{"appendonly yes"}},
+		cachev1alpha1.PersistenceAOFAndRDB: {wants: []string{"appendonly yes", "save 3600 1 300 100 60 10000"}},
+		cachev1alpha1.PersistenceNone:      {wants: []string{"appendonly no", "save \"\""}, absent: []string{"appendonly yes"}},
+	}
+	for mode, exp := range cases {
+		cr := testCR()
+		cr.Spec.Persistence.Mode = mode
+		conf := RenderValkeyConf(cr)
+		for _, w := range exp.wants {
+			if !strings.Contains(conf, w) {
+				t.Errorf("mode %s: missing %q\n---\n%s", mode, w, conf)
+			}
+		}
+		for _, a := range exp.absent {
+			if strings.Contains(conf, a) {
+				t.Errorf("mode %s: unexpected %q", mode, a)
+			}
 		}
 	}
 }

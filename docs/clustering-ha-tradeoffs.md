@@ -38,15 +38,33 @@ just-acked write can be lost when a replica is promoted. This is the fundamental
 
 ## `haPolicy` knobs
 
+The spec groups the dials into three axes — **HA**, **Persistence**, and **Performance**.
+
+### `haPolicy` — availability / consistency
+
 | Field | Maps to | Trade-off | When to raise/change it |
 |-------|---------|-----------|--------------------------|
 | `minReplicasToWrite` | `min-replicas-to-write` | durability ↑ / write-availability ↓ | Set ≥1 to refuse writes when no replica can receive them — shrinks the data-loss window, but the primary stops accepting writes if replicas are down. |
-| `appendFsync` | `appendfsync` | durability ↑ / throughput ↓ | `always` fsyncs every write (safest, slowest); `everysec` (default) loses ≤1s on crash; `no` is fastest, least safe. |
 | `requireFullCoverage` | `cluster-require-full-coverage` | correctness ↑ / availability ↓ | `true` (default): if any slot is unowned the whole cluster refuses writes (consistent). `false`: keep serving the reachable slots during partial failure/resharding. |
-| `clusterNodeTimeoutMillis` | `cluster-node-timeout` | fast failover / false positives | Lower = quicker failover but more spurious failovers under load/latency; higher = steadier but slower recovery. |
+| `clusterNodeTimeoutMillis` | `cluster-node-timeout` | fast failover / false positives | Lower = quicker failover but more spurious failovers under load/latency; higher = steadier but slower recovery. Measured in `bench/FAILOVER-RESULTS.md`. |
 
-Per-write durability can also be requested by the client with `WAIT <n> <ms>` (block until `n`
-replicas ack) — demonstrated in the benchmark.
+### `persistence` — durability
+
+| Field | Maps to | Trade-off |
+|-------|---------|-----------|
+| `mode` (`AOF`/`RDB`/`AOFAndRDB`/`None`) | `appendonly` + `save` | AOF = better durability (write log); RDB = compact + fast restart but loses writes since the last snapshot (and forks, doubling memory under write load); `AOFAndRDB` = both; `None` = pure cache, fastest, no disk durability. |
+| `appendFsync` | `appendfsync` | durability ↑ / throughput ↓ — `always` fsyncs every write (safest, slowest); `everysec` (default) loses ≤1s on crash; `no` is fastest. Only applies when AOF is enabled. |
+
+### `performance` — throughput / memory
+
+| Field | Maps to | Trade-off |
+|-------|---------|-----------|
+| `ioThreads` | `io-threads` | Valkey-8 network I/O parallelism. Higher = more throughput on multi-core nodes (command execution stays single-threaded), at the cost of CPU. The signature Valkey-vs-Redis lever. |
+| `maxmemoryPolicy` | `maxmemory-policy` | `noeviction` (default) rejects writes at `maxmemory` — correct for a **datastore**; `allkeys-lru`/`allkeys-lfu` evict — correct for a **cache** (LFU beats LRU on skewed/hot-key access); `volatile-*` evict only keys with a TTL. |
+
+`maxmemory` itself is derived automatically at ~70% of the container memory limit (COW/buffer
+headroom). Per-write durability can also be requested by the client with `WAIT <n> <ms>` (block
+until `n` replicas ack) — demonstrated in the benchmark.
 
 ## Anti-affinity (HA that actually holds)
 
@@ -56,11 +74,15 @@ the whole shard down. The operator schedules each shard's pods with **preferred 
 
 ## What the benchmark shows
 
-`bench/benchmark.sh` quantifies these trade-offs (see `bench/`):
+The benchmarks in `bench/` quantify these trade-offs:
 
-1. **Throughput vs. shard count** — aggregate SET/GET ops/sec at 1 vs 3 vs 5 shards (sharding scale-out).
-2. **Durability vs. latency** — plain `SET` vs `SET` followed by `WAIT 1` (replica-acked).
-3. **`appendFsync` impact** — throughput at `everysec` vs `always`.
-4. **Failover blip** — availability/latency during a primary loss.
+1. **Throughput vs. shard count** — aggregate SET/GET ops/sec as shards scale (sharding scale-out).
+2. **Durability vs. latency** — plain `SET` vs `SET` + `WAIT 1` (replica-acked). → `bench/RESULTS.md`.
+3. **Failover window vs. `cluster-node-timeout`** — write-availability gap when a primary is killed,
+   swept across node-timeout values. → `bench/FAILOVER-RESULTS.md`.
+4. **`io-threads` scaling** and **`appendFsync`/persistence mode** — re-run `bench/benchmark.sh` after
+   patching `performance.ioThreads` or `persistence` to compare (the `ioThreads` 1→4 sweep is the
+   clearest Valkey-specific throughput signal).
 
-Results table is written to `bench/RESULTS.md` after a run.
+`bench/benchmark.sh <cluster>` writes `bench/RESULTS.md`; `bench/failover-bench.sh <cluster>` writes
+`bench/FAILOVER-RESULTS.md`.

@@ -11,8 +11,16 @@ spec:
   image: valkey/valkey:8
   storage:
     size: 1Gi
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: "1", memory: 256Mi }
+  persistence:
+    mode: AOF              # AOF | RDB | AOFAndRDB | None
+    appendFsync: everysec  # always | everysec | no
+  performance:
+    ioThreads: 1
+    maxmemoryPolicy: noeviction
   haPolicy:
     minReplicasToWrite: 0
     requireFullCoverage: true
-    appendFsync: everysec
     clusterNodeTimeoutMillis: 5000

@@ -31,10 +31,15 @@ spec:
     storageClassName: ""    # "" = default StorageClass
   resources:
     requests: { cpu: 100m, memory: 128Mi }
+  persistence:
+    mode: AOF                   # AOF | RDB | AOFAndRDB | None (durability vs perf/restart)
+    appendFsync: everysec       # always | everysec | no
+  performance:
+    ioThreads: 1                # Valkey-8 network parallelism
+    maxmemoryPolicy: noeviction # datastore (noeviction) vs cache (allkeys-lru/lfu)
   haPolicy:
     minReplicasToWrite: 0       # durability vs write-availability
     requireFullCoverage: true   # availability vs correctness
-    appendFsync: everysec       # always | everysec | no
     clusterNodeTimeoutMillis: 5000
 ```
 

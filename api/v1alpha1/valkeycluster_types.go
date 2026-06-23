@@ -46,6 +46,38 @@ const (
 	AppendFsyncNo       AppendFsync = "no"
 )
 
+// PersistenceMode selects which on-disk persistence mechanisms are enabled.
+// +kubebuilder:validation:Enum=AOF;RDB;AOFAndRDB;None
+type PersistenceMode string
+
+const (
+	// PersistenceAOF enables only the append-only file (better durability).
+	PersistenceAOF PersistenceMode = "AOF"
+	// PersistenceRDB enables only periodic RDB snapshots (compact, fast restart,
+	// loses writes since the last snapshot).
+	PersistenceRDB PersistenceMode = "RDB"
+	// PersistenceAOFAndRDB enables both.
+	PersistenceAOFAndRDB PersistenceMode = "AOFAndRDB"
+	// PersistenceNone disables persistence (pure cache; data lost on full restart).
+	PersistenceNone PersistenceMode = "None"
+)
+
+// PersistenceSpec configures durability and its performance trade-offs.
+type PersistenceSpec struct {
+	// mode selects the persistence mechanism(s): AOF (default), RDB, AOFAndRDB, or None.
+	// Trade-off: AOF favors durability; RDB favors compactness and restart speed but
+	// loses writes since the last snapshot; None is fastest (pure cache).
+	// +kubebuilder:default=AOF
+	// +optional
+	Mode PersistenceMode `json:"mode,omitempty"`
+
+	// appendFsync sets the AOF fsync cadence (used only when AOF is enabled):
+	// always (safest, slowest), everysec (default, lose <=1s), or no (fastest).
+	// +kubebuilder:default=everysec
+	// +optional
+	AppendFsync AppendFsync `json:"appendFsync,omitempty"`
+}
+
 // HAPolicy exposes the Valkey clustering/HA settings whose performance
 // trade-offs the operator lets users tune. See docs/clustering-ha-tradeoffs.md.
 type HAPolicy struct {
@@ -64,18 +96,36 @@ type HAPolicy struct {
 	// +optional
 	RequireFullCoverage *bool `json:"requireFullCoverage,omitempty"`
 
-	// appendFsync sets the AOF fsync cadence (maps to appendfsync).
-	// Trade-off: durability vs. throughput. Default everysec.
-	// +kubebuilder:default=everysec
-	// +optional
-	AppendFsync AppendFsync `json:"appendFsync,omitempty"`
-
 	// clusterNodeTimeoutMillis is the failure-detection window in milliseconds
 	// (maps to cluster-node-timeout). Trade-off: failover speed vs. false positives.
 	// +kubebuilder:validation:Minimum=1000
 	// +kubebuilder:default=5000
 	// +optional
 	ClusterNodeTimeoutMillis int32 `json:"clusterNodeTimeoutMillis,omitempty"`
+}
+
+// MaxmemoryPolicy is the eviction policy applied when maxmemory is reached.
+// +kubebuilder:validation:Enum=noeviction;allkeys-lru;allkeys-lfu;allkeys-random;volatile-lru;volatile-lfu;volatile-random;volatile-ttl
+type MaxmemoryPolicy string
+
+// PerformanceSpec exposes throughput/memory tuning and its trade-offs.
+type PerformanceSpec struct {
+	// ioThreads sets the number of Valkey I/O threads for network read/write/parse
+	// (command execution stays single-threaded). Higher values raise throughput on
+	// multi-core nodes. Trade-off: CPU usage vs. throughput. (Valkey 8.)
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=128
+	// +kubebuilder:default=1
+	// +optional
+	IOThreads int32 `json:"ioThreads,omitempty"`
+
+	// maxmemoryPolicy is the behavior when maxmemory is reached. noeviction (default)
+	// rejects writes — correct for a datastore; the allkeys-*/volatile-* policies evict —
+	// correct for a cache (LFU beats LRU on skewed/hot-key access). Trade-off:
+	// datastore correctness vs. cache graceful-degradation.
+	// +kubebuilder:default=noeviction
+	// +optional
+	MaxmemoryPolicy MaxmemoryPolicy `json:"maxmemoryPolicy,omitempty"`
 }
 
 // ValkeyClusterSpec defines the desired topology of a Valkey cluster.
@@ -107,6 +157,14 @@ type ValkeyClusterSpec struct {
 	// resources are the compute resources for the valkey container.
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// persistence configures durability (RDB vs. AOF) and its trade-offs.
+	// +optional
+	Persistence PersistenceSpec `json:"persistence,omitempty"`
+
+	// performance tunes throughput/memory settings (io-threads, eviction policy).
+	// +optional
+	Performance PerformanceSpec `json:"performance,omitempty"`
 
 	// haPolicy tunes the clustering/HA settings and their performance trade-offs.
 	// +optional

@@ -59,16 +59,6 @@ spec:
                 description: haPolicy tunes the clustering/HA settings and their performance
                   trade-offs.
                 properties:
-                  appendFsync:
-                    default: everysec
-                    description: |-
-                      appendFsync sets the AOF fsync cadence (maps to appendfsync).
-                      Trade-off: durability vs. throughput. Default everysec.
-                    enum:
-                    - always
-                    - everysec
-                    - "no"
-                    type: string
                   clusterNodeTimeoutMillis:
                     default: 5000
                     description: |-
@@ -99,6 +89,65 @@ spec:
                 description: image is the Valkey container image to run (must include
                   valkey-cli).
                 type: string
+              performance:
+                description: performance tunes throughput/memory settings (io-threads,
+                  eviction policy).
+                properties:
+                  ioThreads:
+                    default: 1
+                    description: |-
+                      ioThreads sets the number of Valkey I/O threads for network read/write/parse
+                      (command execution stays single-threaded). Higher values raise throughput on
+                      multi-core nodes. Trade-off: CPU usage vs. throughput. (Valkey 8.)
+                    format: int32
+                    maximum: 128
+                    minimum: 1
+                    type: integer
+                  maxmemoryPolicy:
+                    default: noeviction
+                    description: |-
+                      maxmemoryPolicy is the behavior when maxmemory is reached. noeviction (default)
+                      rejects writes — correct for a datastore; the allkeys-*/volatile-* policies evict —
+                      correct for a cache (LFU beats LRU on skewed/hot-key access). Trade-off:
+                      datastore correctness vs. cache graceful-degradation.
+                    enum:
+                    - noeviction
+                    - allkeys-lru
+                    - allkeys-lfu
+                    - allkeys-random
+                    - volatile-lru
+                    - volatile-lfu
+                    - volatile-random
+                    - volatile-ttl
+                    type: string
+                type: object
+              persistence:
+                description: persistence configures durability (RDB vs. AOF) and its
+                  trade-offs.
+                properties:
+                  appendFsync:
+                    default: everysec
+                    description: |-
+                      appendFsync sets the AOF fsync cadence (used only when AOF is enabled):
+                      always (safest, slowest), everysec (default, lose <=1s), or no (fastest).
+                    enum:
+                    - always
+                    - everysec
+                    - "no"
+                    type: string
+                  mode:
+                    default: AOF
+                    description: |-
+                      mode selects the persistence mechanism(s): AOF (default), RDB, AOFAndRDB, or None.
+                      Trade-off: AOF favors durability; RDB favors compactness and restart speed but
+                      loses writes since the last snapshot; None is fastest (pure cache).
+                    enum:
+                    - AOF
+                    - RDB
+                    - AOFAndRDB
+                    - None
+                    type: string
+                type: object
               replicasPerShard:
                 default: 1
                 description: replicasPerShard is the number of HA replica copies per

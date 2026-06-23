@@ -4,27 +4,49 @@ metadata:
   name: try
   namespace: default
 spec:
-  # Topology: 3 data shards (primaries), 1 HA replica each => 6 pods.
+  # ─── Topology ─────────────────────────────────────────────────────────────
+  # 3 data shards (primaries), 2 HA replicas each => 9 pods.
   # shards must be 1 (HA-only) or >= 3 (cluster needs a 3-primary failover quorum).
+  # Edit shards/replicasPerShard and re-apply to reshard / scale replicas live.
   shards: 3
-  replicasPerShard: 1
+  replicasPerShard: 2
 
   image: valkey/valkey:8
 
+  # ─── Storage (per-pod PVC; node identity + data survive restarts) ──────────
   storage:
-    size: 512Mi
-    # storageClassName: ""   # "" uses the cluster default StorageClass (kind has one)
+    size: 1Gi
+    # storageClassName: ""        # "" = cluster default StorageClass
 
-  # Per-pod compute. A memory limit makes the operator set maxmemory at ~70% of it
-  # (headroom for RDB/AOF copy-on-write forks) with a noeviction policy.
+  # ─── Compute (a memory limit makes the operator set maxmemory ~70% of it,
+  #     leaving headroom for RDB/AOF copy-on-write forks => no OOMKill) ────────
   resources:
-    requests: { cpu: 100m, memory: 128Mi }
-    limits:   { cpu: "1",  memory: 256Mi }
+    requests: { cpu: 200m, memory: 256Mi }
+    limits:   { cpu: "1",  memory: 512Mi }
 
-  # Clustering / HA tuning (all optional; sane defaults shown). See
-  # docs/clustering-ha-tradeoffs.md for what each dial trades.
+  # ─── Persistence: durability vs. performance (RDB vs. AOF) ──────────────────
+  persistence:
+    mode: AOFAndRDB        # AOF | RDB | AOFAndRDB | None
+                           #   AOF       = better durability (replay write log)
+                           #   RDB       = compact snapshots, fast restart, lose-since-snapshot
+                           #   AOFAndRDB = both (durability + fast restart)
+                           #   None      = pure cache, fastest, no disk durability
+    appendFsync: everysec  # always (safest/slowest) | everysec (≤1s loss) | no (fastest)
+
+  # ─── Performance: throughput / memory tuning ───────────────────────────────
+  performance:
+    ioThreads: 2           # Valkey-8 network I/O threads (exec stays single-threaded);
+                           #   raise on multi-core nodes for more throughput
+    maxmemoryPolicy: noeviction
+                           #   noeviction      = reject writes at maxmemory (datastore-correct)
+                           #   allkeys-lru/lfu = evict (cache); LFU wins on skewed/hot-key access
+                           #   volatile-*      = evict only keys with a TTL
+
+  # ─── HA / consistency dials: availability vs. durability vs. correctness ────
   haPolicy:
-    minReplicasToWrite: 0        # >=1 refuses writes unless a replica is in sync (durability vs availability)
-    requireFullCoverage: true    # serve only when all slots covered (correctness vs availability)
-    appendFsync: everysec        # always | everysec | no (durability vs throughput)
-    clusterNodeTimeoutMillis: 5000  # failover speed vs false positives
+    minReplicasToWrite: 1        # refuse writes unless >=1 replica is in sync
+                                 #   (durability ↑, write-availability ↓)
+    requireFullCoverage: true    # serve only when all 16384 slots are covered
+                                 #   true = correctness; false = stay up on partial outage
+    clusterNodeTimeoutMillis: 5000  # failure-detection window
+                                    #   lower = faster failover, more false positives
