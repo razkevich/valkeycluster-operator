@@ -53,7 +53,10 @@ var _ = Describe("ValkeyCluster lifecycle", Ordered, func() {
 	clusterCheck := func() (string, error) {
 		return kubectl("exec", seed, "--", "valkey-cli", "--cluster", "check", "127.0.0.1:6379")
 	}
-	phase := func() string { p, _ := kubectl("get", "valkeycluster", name, "-o", "jsonpath={.status.phase}"); return p }
+	phase := func() string {
+		p, _ := kubectl("get", "valkeycluster", name, "-o", "jsonpath={.status.phase}")
+		return p
+	}
 	readyShards := func() string {
 		r, _ := kubectl("get", "valkeycluster", name, "-o", "jsonpath={.status.readyShards}")
 		return r
@@ -188,5 +191,43 @@ spec:
 		By("returning to Ready with 5 shards still covered")
 		Eventually(phase, 5*time.Minute, 10*time.Second).Should(Equal("Ready"))
 		Expect(readyShards()).To(Equal("5"))
+	})
+
+	It("scales in 5->3 preserving data and tearing down departed shards (US3)", func() {
+		By("writing a second batch of keys at the scale-in pivot (live writes)")
+		Eventually(func() error {
+			for i := 30; i < 60; i++ {
+				if _, err := vexec("set", fmt.Sprintf("e2e:%d", i), fmt.Sprintf("v%d", i)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}, 2*time.Minute, 5*time.Second).Should(Succeed())
+		Eventually(readAllOK(60), time.Minute, 5*time.Second).Should(Succeed())
+
+		By("scaling shards back to 3")
+		_, err := kubectl("patch", "valkeycluster", name, "--type", "merge", "-p", `{"spec":{"shards":3}}`)
+		Expect(err).NotTo(HaveOccurred())
+
+		By("settling back to Ready with exactly 3 shards")
+		Eventually(readyShards, 10*time.Minute, 10*time.Second).Should(Equal("3"))
+		Eventually(phase, 2*time.Minute, 10*time.Second).Should(Equal("Ready"))
+
+		By("exactly 3 primaries cover all slots")
+		Eventually(func() (string, error) { return clusterCheck() }, 2*time.Minute, 5*time.Second).
+			Should(And(ContainSubstring("All 16384 slots covered"), ContainSubstring("3 primaries")))
+
+		By("departed shard StatefulSets are torn down (only shards 0-2 remain)")
+		Eventually(func() (string, error) {
+			return kubectl("get", "statefulset", "-l", "app.kubernetes.io/instance="+name,
+				"-o", "jsonpath={.items[*].metadata.name}")
+		}, 3*time.Minute, 10*time.Second).Should(And(
+			ContainSubstring(name+"-shard-2"),
+			Not(ContainSubstring(name+"-shard-3")),
+			Not(ContainSubstring(name+"-shard-4")),
+		))
+
+		By("every key from both batches survives the scale-in")
+		Eventually(readAllOK(60), 2*time.Minute, 5*time.Second).Should(Succeed())
 	})
 })
