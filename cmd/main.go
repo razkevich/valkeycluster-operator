@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	cachev1alpha1 "github.com/razkevich/valkeycluster-operator/api/v1alpha1"
+	"github.com/razkevich/valkeycluster-operator/internal/cluster"
 	"github.com/razkevich/valkeycluster-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
@@ -178,9 +179,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	podExec, err := cluster.NewPodExec(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to create pod executor")
+		os.Exit(1)
+	}
 	if err := (&controller.ValkeyClusterReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Admin:  cluster.NewAdmin(podExec, "valkey"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "valkeycluster")
 		os.Exit(1)

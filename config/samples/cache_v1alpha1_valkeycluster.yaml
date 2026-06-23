@@ -6,5 +6,13 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: valkeycluster-sample
 spec:
-  replicas: 3
+  shards: 3
+  replicasPerShard: 1
   image: valkey/valkey:8
+  storage:
+    size: 1Gi
+  haPolicy:
+    minReplicasToWrite: 0
+    requireFullCoverage: true
+    appendFsync: everysec
+    clusterNodeTimeoutMillis: 5000

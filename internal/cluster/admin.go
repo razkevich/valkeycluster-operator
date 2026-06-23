@@ -21,7 +21,10 @@ limitations under the License.
 // without a live Valkey (constitution principle II).
 package cluster
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // TotalSlots is the fixed number of hash slots in a Valkey/Redis cluster.
 const TotalSlots = 16384
@@ -32,13 +35,17 @@ type SlotRange struct {
 	End   int
 }
 
-// Endpoint addresses a single Valkey node. PodName drives pod-exec for the
-// valkey-cli migration commands.
+// Endpoint addresses a single Valkey node. PodName/Namespace drive pod-exec for
+// the valkey-cli migration commands.
 type Endpoint struct {
-	Host    string
-	Port    int
-	PodName string
+	Host      string
+	Port      int
+	PodName   string
+	Namespace string
 }
+
+// Addr returns the host:port dial address.
+func (e Endpoint) Addr() string { return fmt.Sprintf("%s:%d", e.Host, e.Port) }
 
 // NodeInfo is one node's view as parsed from CLUSTER NODES.
 type NodeInfo struct {
