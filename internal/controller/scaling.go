@@ -40,38 +40,49 @@ import (
 // whole shard in seconds for sparse data instead of minutes.
 const drainBatchSlots = 1024
 
-// scaleOut joins each new shard's primary (ordinal 0), moves that primary its
-// fair share of slots with a *targeted* reshard (never --use-empty-masters, which
-// would also hand slots to replica pods that are momentarily empty masters), then
-// joins and attaches the new shards' replicas. Idempotent: a primary that already
-// holds its share is skipped, so a retry never over-assigns.
+// scaleOut joins each new shard's primary and replicas, attaches the replicas,
+// then moves each new primary its fair share of slots with the native slot-mover
+// (ClusterAdmin.MoveSlots), pulling from the fattest primary first. Replicas are
+// attached BEFORE slots move so a new primary has in-sync replicas before it holds
+// data — otherwise MIGRATE into it fails with NOREPLICAS when minReplicasToWrite>=1.
+// MoveSlots is deterministic where valkey-cli reshard is not (the latter refuses on
+// uneven/interrupted distributions), so scale-out converges from any state.
+// Idempotent: a primary already holding its share is skipped, so a retry never over-assigns.
 func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha1.ValkeyCluster, oldShards int) error {
 	seed := r.seed(cr)
 	desired := int(cr.Spec.Shards)
 	perShard := cluster.TotalSlots / desired
 
-	// 1. join only the new primaries
+	// 1. Join each new shard's primary AND replicas, and attach the replicas before
+	// moving any slots (attaching an empty primary's replicas is instant, and gives
+	// it the in-sync replica MIGRATE needs under minReplicasToWrite>=1).
 	for i := oldShards; i < desired; i++ {
-		if err := r.Admin.Meet(ctx, seed, r.endpoint(cr, i, 0)); err != nil {
-			return err
+		for j := 0; j <= int(cr.Spec.ReplicasPerShard); j++ {
+			if err := r.Admin.Meet(ctx, seed, r.endpoint(cr, i, j)); err != nil {
+				return err
+			}
 		}
 	}
+	state, err := r.Admin.State(ctx, seed)
+	if err != nil {
+		return err
+	}
+	if err := r.attachReplicas(ctx, cr, state); err != nil {
+		return err
+	}
+
 	// 2. Move each new primary its fair share with the native slot-mover, pulling
-	// from the fattest primary first. This is deterministic where valkey-cli
-	// reshard is not: `--cluster-from all` refuses (exit 1) on an uneven or
-	// interrupted distribution — e.g. after the desired topology is changed
-	// mid-reshard — which would wedge scale-out. MoveSlots never refuses, so the
-	// cluster converges from any starting distribution.
+	// from the fattest primary first.
 	for i := oldShards; i < desired; i++ {
 		id, err := r.Admin.MyID(ctx, r.endpoint(cr, i, 0))
 		if err != nil || id == "" {
 			return fmt.Errorf("resolve new primary %d id: %w", i, err)
 		}
-		state, err := r.Admin.State(ctx, seed)
+		st, err := r.Admin.State(ctx, seed)
 		if err != nil {
 			return err
 		}
-		idx := byID(state)
+		idx := byID(st)
 		need := perShard - idx[id].SlotCount()
 		for need > 0 {
 			srcID, srcSlots := fattestPrimary(idx, id)
@@ -90,22 +101,16 @@ func (r *ValkeyClusterReconciler) scaleOut(ctx context.Context, cr *cachev1alpha
 				break
 			}
 			need -= moved
-			state, err = r.Admin.State(ctx, seed)
+			st, err = r.Admin.State(ctx, seed)
 			if err != nil {
 				return err
 			}
-			idx = byID(state)
+			idx = byID(st)
 		}
 	}
-	// 3. join and attach the new shards' replicas (now that slots are placed)
-	for i := oldShards; i < desired; i++ {
-		for j := 1; j <= int(cr.Spec.ReplicasPerShard); j++ {
-			if err := r.Admin.Meet(ctx, seed, r.endpoint(cr, i, j)); err != nil {
-				return err
-			}
-		}
-	}
-	state, err := r.Admin.State(ctx, seed)
+
+	// 3. Re-attach replicas (roles may have settled after the move).
+	state, err = r.Admin.State(ctx, seed)
 	if err != nil {
 		return err
 	}
