@@ -39,6 +39,38 @@ func TestNaming(t *testing.T) {
 	}
 }
 
+// TestConfigHashTriggersRollout pins the propagation guarantee: a change to any
+// valkey.conf-rendered setting (here io-threads) changes the pod-template
+// config-hash annotation, so the StatefulSet rolls and the new config actually
+// takes effect — while an unrelated change leaves the hash stable (no spurious
+// restarts).
+func TestConfigHashTriggersRollout(t *testing.T) {
+	base := testCR()
+	hashOf := func(cr *cachev1alpha1.ValkeyCluster) string {
+		return StatefulSet(cr, 0).Spec.Template.Annotations[configHashAnnotation]
+	}
+
+	if hashOf(base) == "" {
+		t.Fatal("pod template is missing the config-hash annotation")
+	}
+	// identical spec → identical hash (idempotent, no spurious rollout)
+	if hashOf(base) != hashOf(testCR()) {
+		t.Error("config-hash is not stable for identical specs")
+	}
+	// a performance change → different hash → rollout
+	changed := testCR()
+	changed.Spec.Performance.IOThreads = 4
+	if hashOf(base) == hashOf(changed) {
+		t.Error("changing ioThreads did not change the config-hash (would be inert)")
+	}
+	// an haPolicy change → different hash → rollout
+	hp := testCR()
+	hp.Spec.HAPolicy.MinReplicasToWrite = 1
+	if hashOf(base) == hashOf(hp) {
+		t.Error("changing minReplicasToWrite did not change the config-hash")
+	}
+}
+
 func TestHeadlessService(t *testing.T) {
 	svc := HeadlessService(testCR())
 	if svc.Spec.ClusterIP != "None" {

@@ -19,6 +19,8 @@ limitations under the License.
 package resources
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -44,7 +46,19 @@ const (
 	labelManagedBy = "app.kubernetes.io/managed-by"
 	// LabelShard identifies the shard a pod belongs to.
 	LabelShard = "valkey.razkevich.dev/shard"
+	// configHashAnnotation carries a hash of the rendered valkey.conf on the pod
+	// template, so any change to the config rolls the StatefulSet (a restart is
+	// the only way startup-only settings like io-threads take effect).
+	configHashAnnotation = "valkey.razkevich.dev/config-hash"
 )
+
+// configHash returns a short hash of the rendered valkey.conf. Stamping it on the
+// pod template makes a config change alter the template, which triggers a
+// StatefulSet rolling restart (one pod at a time, readiness-gated).
+func configHash(cr *cachev1alpha1.ValkeyCluster) string {
+	sum := sha256.Sum256([]byte(RenderValkeyConf(cr)))
+	return hex.EncodeToString(sum[:8])
+}
 
 // HeadlessServiceName returns the name of the per-cluster headless Service.
 func HeadlessServiceName(cr *cachev1alpha1.ValkeyCluster) string { return cr.Name + "-nodes" }
@@ -229,7 +243,10 @@ func StatefulSet(cr *cachev1alpha1.ValkeyCluster, shard int) *appsv1.StatefulSet
 			PodManagementPolicy: appsv1.ParallelPodManagement,
 			Selector:            &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{configHashAnnotation: configHash(cr)},
+				},
 				Spec: corev1.PodSpec{
 					Affinity: &corev1.Affinity{
 						PodAntiAffinity: &corev1.PodAntiAffinity{
