@@ -88,8 +88,12 @@ cmd/main.go                       # manager entrypoint (existing)
 
 internal/
 ├── controller/
-│   ├── valkeycluster_controller.go   # Reconcile: ensure resources → form → diff/reshard → status
-│   ├── phases.go                     # provision / form / reconcileReplicas / reshard / status helpers
+│   ├── valkeycluster_controller.go   # Reconcile entrypoint: finalizer, ensure, readiness gate, dispatch
+│   ├── reconcile.go                  # observe → decide → act core + cluster formation
+│   ├── resources.go                  # ensure ConfigMap / Service / StatefulSets + readiness
+│   ├── scaling.go                    # scale-out / scale-in + shard & PVC teardown
+│   ├── membership.go                 # replica attach, primary discovery, stale-node forgetting
+│   ├── status.go                     # status/conditions + decision-input summary
 │   └── valkeycluster_controller_test.go  # envtest, fake ClusterAdmin
 ├── cluster/                          # Valkey cluster orchestration (the "ClusterAdmin")
 │   ├── admin.go                      # ClusterAdmin interface + domain types (NodeInfo, Topology)

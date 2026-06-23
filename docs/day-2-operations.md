@@ -37,6 +37,12 @@ kubectl run vk -it --rm --image=valkey/valkey:8 --restart=Never -- \
   valkey-cli -c -h demo-shard-0-0.demo-nodes set foo bar     # -c = cluster mode
 ```
 
+**Retry on `CLUSTERDOWN`.** With the default `requireFullCoverage: true`, a node rejects *all*
+commands while any slot is uncovered from its view — a brief window during initial **formation**
+and mid-**resharding**, before coverage is gossiped cluster-wide. This is expected; a production
+client should retry with backoff (most cluster clients do by default). A non-retrying script that
+writes the instant `phase` first reads `Ready` can see those first writes bounce.
+
 ## Scale replicas (HA copies per shard)
 
 ```bash
@@ -64,9 +70,16 @@ Failover is automatic (Valkey cluster gossip promotes a replica). To exercise it
 
 ```bash
 kubectl delete pod demo-shard-0-0          # kill a primary
-# within ~node-timeout a replica is promoted; the killed pod returns as a replica
 kubectl get valkeycluster demo -o jsonpath='{.status.shards[0].primaryPod}'
 ```
+Promotion is gated by `cluster-node-timeout`: a replica is promoted only after the primary is
+unreachable for longer than that window. A quick `kubectl delete pod` usually brings the **same**
+node back (its identity persists in `nodes.conf` on the PVC) before the timeout elapses, so it
+**resumes as primary** with no failover — no needless data movement. A genuine longer outage
+(node failure) promotes a replica; the old primary then rejoins as a **replica**. To force a real
+failover for testing, keep the primary down past the timeout (e.g. `kubectl exec demo-shard-0-0 --
+valkey-cli debug sleep <seconds>` longer than `clusterNodeTimeoutMillis`).
+
 Inspect roles directly:
 ```bash
 kubectl exec demo-shard-0-0 -- valkey-cli --cluster check 127.0.0.1:6379
