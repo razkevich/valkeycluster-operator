@@ -132,7 +132,7 @@ func Decide(desired Desired, observed Observed) Plan {
 
 A "shard" is counted as a **primary that owns slots** — a replica pod briefly appearing as an empty
 master is not mistaken for an extra shard. How the loop stays correct under crashes, races, and
-partial failures is detailed in [Reconcile Loop & Edge Cases](reconcile-edge-cases.md).
+partial failures is detailed in [Operator Best Practices & Edge Cases](reconcile-edge-cases.md).
 
 ## The testability seam
 

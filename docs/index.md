@@ -76,7 +76,8 @@ flowchart LR
 |---|---|
 | Understand the design end-to-end | [Architecture](walkthrough.md) |
 | Operate a running cluster | [Day-2 Operations](day-2-operations.md) |
-| See how the loop stays correct under failure | [Reconcile Loop & Edge Cases](reconcile-edge-cases.md) |
+| Understand the design decisions and how it differs from KubeBlocks | [Design Decisions & KubeBlocks](design-decisions.md) |
+| See how the loop stays correct under failure | [Operator Best Practices & Edge Cases](reconcile-edge-cases.md) |
 | Tune performance and availability (CR + OS levers, cache profile) | [Settings for Performance and High Availability](settings.md) |
 | See how it's tested | [Testing & Verification](manual-verification.md) |
 | How it was built with AI | [AI Development Methodology](ai-development.md) |

@@ -1,4 +1,4 @@
-# Reconcile Loop & Edge Cases
+# Operator Best Practices & Edge Cases
 
 A clustering operator's correctness lives in the gaps between "it compiled" and "it survived a real
 failover or reshard." This page describes the patterns the reconcile loop uses to stay correct under
