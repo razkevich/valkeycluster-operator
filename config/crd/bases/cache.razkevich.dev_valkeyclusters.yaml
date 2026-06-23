@@ -15,10 +15,16 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.replicas
-      name: Desired
+    - jsonPath: .spec.shards
+      name: Shards
       type: integer
-    - jsonPath: .status.readyReplicas
+    - jsonPath: .spec.replicasPerShard
+      name: Replicas
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.readyShards
       name: Ready
       type: integer
     - jsonPath: .metadata.creationTimestamp
@@ -27,7 +33,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ValkeyCluster is the Schema for the valkeyclusters API
+        description: ValkeyCluster is the Schema for the valkeyclusters API.
         properties:
           apiVersion:
             description: |-
@@ -49,32 +55,158 @@ spec:
           spec:
             description: spec defines the desired state of ValkeyCluster
             properties:
+              haPolicy:
+                description: haPolicy tunes the clustering/HA settings and their performance
+                  trade-offs.
+                properties:
+                  appendFsync:
+                    default: everysec
+                    description: |-
+                      appendFsync sets the AOF fsync cadence (maps to appendfsync).
+                      Trade-off: durability vs. throughput. Default everysec.
+                    enum:
+                    - always
+                    - everysec
+                    - "no"
+                    type: string
+                  clusterNodeTimeoutMillis:
+                    default: 5000
+                    description: |-
+                      clusterNodeTimeoutMillis is the failure-detection window in milliseconds
+                      (maps to cluster-node-timeout). Trade-off: failover speed vs. false positives.
+                    format: int32
+                    minimum: 1000
+                    type: integer
+                  minReplicasToWrite:
+                    default: 0
+                    description: |-
+                      minReplicasToWrite makes a primary refuse writes unless at least this many
+                      replicas are connected and in sync (maps to min-replicas-to-write).
+                      Trade-off: durability vs. write-availability. Default 0 (always accept writes).
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  requireFullCoverage:
+                    default: true
+                    description: |-
+                      requireFullCoverage controls whether the cluster serves its reachable slots
+                      when some slots are unavailable (maps to cluster-require-full-coverage).
+                      Trade-off: availability vs. correctness. Default true.
+                    type: boolean
+                type: object
               image:
                 default: valkey/valkey:8
-                description: image is the Valkey container image to run.
+                description: image is the Valkey container image to run (must include
+                  valkey-cli).
                 type: string
-              replicas:
-                default: 3
-                description: replicas is the desired number of Valkey nodes in the
-                  cluster.
+              replicasPerShard:
+                default: 1
+                description: replicasPerShard is the number of HA replica copies per
+                  shard. 0 means no HA.
                 format: int32
-                minimum: 1
+                maximum: 5
+                minimum: 0
                 type: integer
+              resources:
+                description: resources are the compute resources for the valkey container.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              shards:
+                default: 3
+                description: |-
+                  shards is the number of data partitions (primaries). The keyspace is split
+                  across shards. Must be 1 (HA-only, no sharding) or >= 3 (failover quorum).
+                format: int32
+                maximum: 16
+                type: integer
+                x-kubernetes-validations:
+                - message: shards must be 1 or >= 3 (2 cannot form a failover quorum)
+                  rule: self == 1 || self >= 3
+              storage:
+                description: storage configures the per-node persistent volume.
+                properties:
+                  size:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 1Gi
+                    description: |-
+                      size is the per-node persistent volume size. Immutable after creation
+                      (volume expansion is out of scope).
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                    x-kubernetes-validations:
+                    - message: storage.size is immutable
+                      rule: self == oldSelf
+                  storageClassName:
+                    description: |-
+                      storageClassName selects the StorageClass for the per-node PVCs.
+                      Empty string uses the cluster default StorageClass.
+                    type: string
+                type: object
             type: object
           status:
             description: status defines the observed state of ValkeyCluster
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the ValkeyCluster resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  conditions represent the current state of the ValkeyCluster resource
+                  (Available, Progressing, Degraded).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -133,11 +265,58 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              readyReplicas:
-                description: readyReplicas is the number of Valkey nodes currently
-                  ready.
+              observedGeneration:
+                description: observedGeneration is the .metadata.generation this status
+                  reflects.
+                format: int64
+                type: integer
+              phase:
+                description: phase is the high-level lifecycle phase.
+                type: string
+              readyShards:
+                description: readyShards is the number of shards with a reachable
+                  primary and assigned slots.
                 format: int32
                 type: integer
+              shards:
+                description: shards holds the observed per-shard state.
+                items:
+                  description: ShardStatus is the observed state of a single shard.
+                  properties:
+                    index:
+                      description: index is the shard ordinal.
+                      format: int32
+                      type: integer
+                    nodeIDs:
+                      description: nodeIDs are the Valkey node IDs that belong to
+                        this shard.
+                      items:
+                        type: string
+                      type: array
+                    primaryNodeID:
+                      description: primaryNodeID is the Valkey node ID of the current
+                        primary.
+                      type: string
+                    primaryPod:
+                      description: primaryPod is the pod currently acting as this
+                        shard's primary.
+                      type: string
+                    readyReplicas:
+                      description: readyReplicas is the number of in-sync replicas
+                        for this shard.
+                      format: int32
+                      type: integer
+                    slots:
+                      description: slots is the hash-slot range owned by this shard
+                        (e.g. "0-5460").
+                      type: string
+                  required:
+                  - index
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - index
+                x-kubernetes-list-type: map
             type: object
         required:
         - spec
