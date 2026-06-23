@@ -19,7 +19,7 @@ spec:
   image: valkey/valkey:8
   storage:
     size: 1Gi
-  haPolicy:            # clustering/HA tuning — see docs/clustering-ha-tradeoffs.md
+  haPolicy:            # performance / HA tuning — see docs/settings.md
     minReplicasToWrite: 0
     requireFullCoverage: true
     appendFsync: everysec

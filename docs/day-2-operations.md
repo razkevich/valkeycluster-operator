@@ -87,16 +87,9 @@ kubectl exec demo-shard-0-0 -- valkey-cli --cluster check 127.0.0.1:6379
 
 ## Tune the HA / consistency policy
 
-See [clustering-ha-tradeoffs.md](./clustering-ha-tradeoffs.md). Example — favor durability:
-
-```yaml
-spec:
-  haPolicy:
-    minReplicasToWrite: 1     # refuse writes unless >=1 replica is in sync
-    appendFsync: always       # fsync every write
-    requireFullCoverage: true
-    clusterNodeTimeoutMillis: 5000
-```
+Edit `spec.haPolicy` / `spec.persistence` / `spec.performance` and re-apply; the operator re-renders
+`valkey.conf` and rolls the pods. Each field, its underlying Valkey directive, and its trade-off are
+documented in [Settings for Performance and High Availability](./settings.md).
 
 ## Teardown
 

@@ -47,7 +47,7 @@ first-class verification gate — the day-2 matrix (`bench/day2-matrix.sh`) and 
 exercise provision, failover, and resharding with reads/writes at every pivot, and any defect they
 expose is fixed at the **root cause** (the class of issue, not the single instance) and locked in with
 a regression test. The Valkey runtime behaviors the operator encodes as a result are documented as
-present-tense facts in [clustering-ha-tradeoffs.md](./clustering-ha-tradeoffs.md) and the
+present-tense facts in [Settings for Performance and High Availability](./settings.md) and the
 [walkthrough](./walkthrough.md) (e.g. MEET-by-IP with hostname announcement, primary discovery via
 `CLUSTER MYID`, masters-only `SETSLOT`, StatefulSet-driven scale-in teardown).
 

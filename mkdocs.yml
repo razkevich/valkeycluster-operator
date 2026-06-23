@@ -61,7 +61,6 @@ nav:
   - Architecture: walkthrough.md
   - Day-2 Operations: day-2-operations.md
   - Reconcile Loop & Edge Cases: reconcile-edge-cases.md
-  - Performance Tuning: performance-tuning.md
-  - Clustering & HA Tradeoffs: clustering-ha-tradeoffs.md
+  - Settings for Performance & HA: settings.md
   - Testing & Verification: manual-verification.md
   - AI Development Methodology: ai-development.md

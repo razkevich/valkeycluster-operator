@@ -44,7 +44,7 @@ spec:
 ```
 
 The tuning fields and their tradeoffs are described in
-[Clustering & HA Tradeoffs](clustering-ha-tradeoffs.md).
+[Settings for Performance and High Availability](settings.md).
 
 The `status` subresource is derived from the live cluster on every reconcile: a `phase`
 (`Provisioning → Forming → Ready / Resharding / Degraded`), per-shard primary, slot range, and ready
