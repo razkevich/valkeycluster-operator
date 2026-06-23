@@ -71,7 +71,6 @@ A user's needs change and they edit the topology — most importantly the number
 - **Invalid shard count**: A topology of `shards: 2` is rejected at admission (cluster failover voting needs a primary majority; meaningful values are `1` for HA-only or `≥3` for sharding).
 - **Operator restart mid-operation**: If the operator crashes during forming or resharding, on restart it detects the partial state and drives the cluster to the declared topology with no manual repair and no data loss.
 - **Node reschedule / address change**: When a pod is rescheduled (new network address), it rejoins the cluster under its original identity using its persisted state, and other nodes and clients continue to reach it via its stable advertised address.
-- **Lost / empty storage**: If a node's persistent storage is lost and recreated empty (stale identity gone), the operator MUST detect this, drop the stale identity from the cluster, and rejoin the node fresh — rather than letting an empty node corrupt the slot map.
 - **All copies of a shard lost simultaneously**: The resource reports `Degraded`/`Failed` for that shard and surfaces that the affected portion of the keyspace is unavailable, rather than silently appearing healthy.
 - **Immutable storage size**: An attempt to change `storage.size` after creation is rejected (volume resizing is out of scope).
 - **Out-of-band drift**: If a node/workload the operator created is deleted out of band, the operator recreates it and re-forms the cluster.
@@ -83,47 +82,46 @@ A user's needs change and they edit the topology — most importantly the number
 **Topology declaration**
 - **FR-001**: Users MUST be able to declare a cluster's desired topology in a single `ValkeyCluster` resource via `shards` (number of data partitions) and `replicasPerShard` (HA copies per shard).
 - **FR-002**: Users MUST be able to specify the Valkey image and a per-node persistent storage size.
-- **FR-003**: Users MUST be able to optionally supply Valkey configuration overrides applied when the cluster is formed.
-- **FR-004**: The system MUST validate topology on admission: `shards` is `1` or `≥3` (reject `2`), and `replicasPerShard ≥ 0`.
-- **FR-005**: The system MUST reject changes to a cluster's per-node storage size after creation.
+- **FR-003**: The system MUST validate topology on admission: `shards` is `1` or `≥3` (reject `2`), and `replicasPerShard ≥ 0`.
+- **FR-004**: The system MUST reject changes to a cluster's per-node storage size after creation.
 
 **Provisioning & cluster formation**
-- **FR-006**: On creation, the system MUST provision `shards × (1 + replicasPerShard)` nodes and form them into a single Valkey cluster.
-- **FR-007**: The system MUST partition the entire keyspace (all hash slots) across the shards so that, when `Ready`, 100% of the keyspace is served.
-- **FR-008**: The system MUST attach each shard's replicas to that shard's primary so they hold copies of the shard's data.
-- **FR-009**: Each node MUST have a stable in-cluster network identity that survives pod restarts and address (IP) changes, and the node MUST advertise that stable address for both cluster gossip — **including the cluster bus channel** — and client redirects. Cluster membership and client routing MUST continue to work after any node's underlying address changes. The system MUST also expose a discovery endpoint that cluster-aware clients can use to reach the cluster.
+- **FR-005**: On creation, the system MUST provision `shards × (1 + replicasPerShard)` nodes and form them into a single Valkey cluster.
+- **FR-006**: The system MUST partition the entire keyspace (all hash slots) across the shards so that, when `Ready`, 100% of the keyspace is served.
+- **FR-007**: The system MUST attach each shard's replicas to that shard's primary so they hold copies of the shard's data.
+- **FR-008**: Each node MUST have a stable in-cluster network identity that survives pod restarts and address (IP) changes, and the node MUST advertise that stable address for both cluster gossip — **including the cluster bus channel** — and client redirects. Cluster membership and client routing MUST continue to work after any node's underlying address changes. The system MUST also expose a discovery endpoint that cluster-aware clients can use to reach the cluster.
 
 **Persistence**
-- **FR-010**: Each node's data AND its cluster membership identity (its node identity and view of the cluster) MUST be persisted to durable storage, so that a restarted or rescheduled node keeps its identity and rejoins the *existing* cluster rather than appearing as a new, duplicate node — with no data loss.
+- **FR-009**: Each node's data AND its cluster membership identity (its node identity and view of the cluster) MUST be persisted to durable storage, so that a restarted or rescheduled node keeps its identity and rejoins the *existing* cluster rather than appearing as a new, duplicate node — with no data loss.
 
 **High availability & failover**
-- **FR-011**: When a shard's primary is lost and that shard has at least one replica, the system MUST result in automatic promotion of a replica so the shard's keyspace keeps serving without operator intervention.
-- **FR-012**: A recovered or replacement node MUST rejoin the cluster (as a replica of the current primary) automatically.
+- **FR-010**: When a shard's primary is lost and that shard has at least one replica, the system MUST result in automatic promotion of a replica so the shard's keyspace keeps serving without operator intervention.
+- **FR-011**: A recovered or replacement node MUST rejoin the cluster (as a replica of the current primary) automatically.
 
 **Resharding & scaling**
-- **FR-013**: When `shards` changes, the system MUST reconcile the cluster to the new shard count and **redistribute the keyspace such that all previously stored data is preserved**.
-- **FR-014**: When scaling shards down, the system MUST migrate the keyspace off departing shards onto remaining shards before removing them, and MUST hand off any primary role to a healthy replica before removing a node that is currently a primary, so that no acknowledged writes are lost.
-- **FR-015**: When `replicasPerShard` changes, the system MUST add or remove HA copies per shard without redistributing the keyspace.
-- **FR-016**: The system MAY make affected portions of the keyspace briefly unavailable during a topology change (disruptive topology changes are acceptable; zero-downtime resharding is not required).
+- **FR-012**: When `shards` changes, the system MUST reconcile the cluster to the new shard count and **redistribute the keyspace such that all previously stored data is preserved**.
+- **FR-013**: When scaling shards down, the system MUST migrate the keyspace off departing shards onto remaining shards before removing them, and MUST hand off any primary role to a healthy replica before removing a node that is currently a primary, so that no acknowledged writes are lost.
+- **FR-014**: When `replicasPerShard` changes, the system MUST add or remove HA copies per shard without redistributing the keyspace.
+- **FR-015**: The system MAY make affected portions of the keyspace briefly unavailable during a topology change (disruptive topology changes are acceptable; zero-downtime resharding is not required).
 
 **Reconciliation, status & lifecycle**
-- **FR-017**: The system MUST continuously reconcile actual cluster state toward the declared topology, repairing drift (e.g., recreating resources deleted out of band, reassigning unserved keyspace).
-- **FR-018**: The system MUST be resilient to its own restarts: after an interruption during forming or resharding, it MUST converge to the declared topology with no manual intervention and no data loss.
-- **FR-019**: The system MUST report a truthful status derived from the live cluster, including an overall phase (e.g., `Provisioning`, `Forming`, `Resharding`, `Ready`, `Degraded`, `Failed`), per-shard primary identity and served keyspace, ready replica counts, and standard conditions (`Available`, `Progressing`, `Degraded`). This status MUST be the monitoring interface, surfaced through `kubectl` — at-a-glance summary columns on `get` and full detail on `describe` — with no separate metrics system or UI required.
-- **FR-020**: Deleting a `ValkeyCluster` MUST remove all resources the operator created for it (nodes, storage, supporting objects).
+- **FR-016**: The system MUST continuously reconcile actual cluster state toward the declared topology, repairing drift (e.g., recreating resources deleted out of band, reassigning unserved keyspace).
+- **FR-017**: The system MUST be resilient to its own restarts: after an interruption during forming or resharding, it MUST converge to the declared topology with no manual intervention and no data loss.
+- **FR-018**: The system MUST report a truthful status derived from the live cluster, including an overall phase (e.g., `Provisioning`, `Forming`, `Resharding`, `Ready`, `Degraded`, `Failed`), per-shard primary identity and served keyspace, ready replica counts, and standard conditions (`Available`, `Progressing`, `Degraded`). This status MUST be the monitoring interface, surfaced through `kubectl` — at-a-glance summary columns on `get` and full detail on `describe` — with no separate metrics system or UI required.
+- **FR-019**: Deleting a `ValkeyCluster` MUST remove all resources the operator created for it (nodes, storage, supporting objects).
 
 **Verification (test suite & benchmark)**
-- **FR-021**: The project MUST include an automated test suite that verifies provisioning, failover, and data-preserving resharding (the three user stories) as day-two operations.
-- **FR-022**: The project MUST include a repeatable benchmark that measures cluster performance and demonstrates the clustering/HA trade-offs (at minimum: write throughput as a function of shard count, and the availability/latency impact of a failover).
-- **FR-023**: The project MUST include documentation for day-two operations (scaling/resharding, observing failover, reading status) and a discussion of the clustering vs. HA performance trade-offs.
+- **FR-020**: The project MUST include an automated test suite that verifies provisioning, failover, and data-preserving resharding (the three user stories) as day-two operations.
+- **FR-021**: The project MUST include a repeatable benchmark that measures cluster performance and demonstrates the clustering/HA trade-offs (at minimum: write throughput as a function of shard count, and the availability/latency impact of a failover).
+- **FR-022**: The project MUST include documentation for day-two operations (scaling/resharding, observing failover, reading status) and a discussion of the clustering vs. HA performance trade-offs.
 
 **Membership safety (working-cluster essentials)**
-- **FR-024**: When a node is removed (shard scale-down or replica reduction), the system MUST remove it from cluster membership and reclaim its persistent storage, so that stale identity/membership state cannot later resurrect and corrupt the cluster if a like-named node is created afterward.
-- **FR-025**: The system MUST NOT begin a topology change while the cluster has open or uncovered slots (e.g., a previous migration was interrupted); it MUST first repair the cluster to full keyspace coverage, then proceed.
+- **FR-023**: When a node is removed (shard scale-down or replica reduction), the system MUST remove it from cluster membership and reclaim its persistent storage, so that stale identity/membership state cannot later resurrect and corrupt the cluster if a like-named node is created afterward.
+- **FR-024**: The system MUST NOT begin a topology change while the cluster has open or uncovered slots (e.g., a previous migration was interrupted); it MUST first repair the cluster to full keyspace coverage, then proceed.
 
 ### Key Entities *(include if feature involves data)*
 
-- **ValkeyCluster**: The user's declaration of a desired cluster. Key attributes: `shards`, `replicasPerShard`, image, storage size, optional config. Carries observed status (phase, conditions, per-shard observed state).
+- **ValkeyCluster**: The user's declaration of a desired cluster. Key attributes: `shards`, `replicasPerShard`, image, per-node storage size. Carries observed status (phase, conditions, per-shard observed state).
 - **Shard**: One data partition of the cluster. Owns a contiguous portion of the keyspace and consists of one primary plus its replicas. The unit that sharding and resharding operate on.
 - **Node (cluster member)**: A single Valkey process participating in the cluster, acting as either a primary or a replica of some shard. Roles can change over time (e.g., after failover); the operator never assumes a fixed role.
 - **Keyspace partition (hash slots)**: The full key space is divided into a fixed number of slots distributed across shards; "serving 100% of the keyspace" means every slot is owned by a reachable primary.
@@ -157,3 +155,6 @@ A user's needs change and they edit the topology — most importantly the number
 - External / cross-cluster access and non-cluster-aware client compatibility.
 - Multi-namespace or multi-cluster (federated) management.
 - Metrics/Prometheus/Grafana integration, custom dashboards, and any bespoke web UI — monitoring is via `kubectl` only (status, conditions, summary columns).
+- User-supplied Valkey configuration overrides — the operator ships sane built-in cluster configuration.
+- User-facing / manual planned switchover as an operation — role hand-off happens only internally when needed (e.g., before removing a primary during scale-in).
+- Recovery from total loss of a node's persistent volume — treated as a documented limitation (node identity and data are assumed to persist with their volume).
