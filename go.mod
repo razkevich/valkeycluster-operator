@@ -1,4 +1,4 @@
-module github.com/razkevich/rediscluster-operator
+module github.com/razkevich/valkeycluster-operator
 
 go 1.26.0
 

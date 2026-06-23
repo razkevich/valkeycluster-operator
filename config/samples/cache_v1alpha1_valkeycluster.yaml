@@ -1,10 +1,10 @@
 apiVersion: cache.razkevich.dev/v1alpha1
-kind: RedisCluster
+kind: ValkeyCluster
 metadata:
   labels:
-    app.kubernetes.io/name: rediscluster
+    app.kubernetes.io/name: valkeycluster
     app.kubernetes.io/managed-by: kustomize
-  name: rediscluster-sample
+  name: valkeycluster-sample
 spec:
   replicas: 3
-  image: redis:7
+  image: valkey/valkey:8

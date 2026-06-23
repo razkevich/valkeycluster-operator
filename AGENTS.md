@@ -1,4 +1,4 @@
-# rediscluster - AI Agent Guide
+# valkeycluster - AI Agent Guide
 
 ## Project Structure
 

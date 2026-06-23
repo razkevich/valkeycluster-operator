@@ -1,7 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
 # Name of the local kind cluster used by the kind-* targets below.
-KIND_CLUSTER ?= rediscluster-dev
+KIND_CLUSTER ?= valkeycluster-dev
 # YEAR defines the year value used for substituting the YEAR placeholder in the boilerplate header.
 YEAR ?= $(shell date +%Y)
 
@@ -71,7 +71,7 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 # - KUBECTL_KUBERC=true
 # CertManager is installed by default; skip with:
 # - CERT_MANAGER_INSTALL_SKIP=true
-KIND_CLUSTER ?= rediscluster-test-e2e
+KIND_CLUSTER ?= valkeycluster-test-e2e
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
@@ -140,10 +140,10 @@ PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 docker-buildx: ## Build and push docker image for the manager for cross-platform support
 	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name rediscluster-builder
-	$(CONTAINER_TOOL) buildx use rediscluster-builder
+	- $(CONTAINER_TOOL) buildx create --name valkeycluster-builder
+	$(CONTAINER_TOOL) buildx use valkeycluster-builder
 	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm rediscluster-builder
+	- $(CONTAINER_TOOL) buildx rm valkeycluster-builder
 	rm Dockerfile.cross
 
 .PHONY: build-installer
@@ -196,8 +196,8 @@ kind-deploy: docker-build kind-load deploy ## Build the image, load it into kind
 
 .PHONY: kind-redeploy
 kind-redeploy: kind-deploy ## kind-deploy plus a rollout restart so the new image (same tag) is picked up.
-	"$(KUBECTL)" -n rediscluster-system rollout restart deployment/rediscluster-controller-manager
-	"$(KUBECTL)" -n rediscluster-system rollout status deployment/rediscluster-controller-manager
+	"$(KUBECTL)" -n valkeycluster-system rollout restart deployment/valkeycluster-controller-manager
+	"$(KUBECTL)" -n valkeycluster-system rollout status deployment/valkeycluster-controller-manager
 
 .PHONY: kind-delete
 kind-delete: ## Delete the local kind cluster (KIND_CLUSTER).

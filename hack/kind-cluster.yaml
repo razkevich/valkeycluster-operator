@@ -1,5 +1,5 @@
-# kind cluster for local RedisCluster operator development.
-# Usage: kind create cluster --name rediscluster-dev --config hack/kind-cluster.yaml
+# kind cluster for local ValkeyCluster operator development.
+# Usage: kind create cluster --name valkeycluster-dev --config hack/kind-cluster.yaml
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:

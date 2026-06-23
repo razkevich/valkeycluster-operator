@@ -24,29 +24,29 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	cachev1alpha1 "github.com/razkevich/rediscluster-operator/api/v1alpha1"
+	cachev1alpha1 "github.com/razkevich/valkeycluster-operator/api/v1alpha1"
 )
 
-// RedisClusterReconciler reconciles a RedisCluster object
-type RedisClusterReconciler struct {
+// ValkeyClusterReconciler reconciles a ValkeyCluster object
+type ValkeyClusterReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=cache.razkevich.dev,resources=redisclusters,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cache.razkevich.dev,resources=redisclusters/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cache.razkevich.dev,resources=redisclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=cache.razkevich.dev,resources=valkeyclusters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cache.razkevich.dev,resources=valkeyclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cache.razkevich.dev,resources=valkeyclusters/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 // TODO(user): Modify the Reconcile function to compare the state specified by
-// the RedisCluster object against the actual cluster state, and then
+// the ValkeyCluster object against the actual cluster state, and then
 // perform operations to make the cluster state reflect the state specified by
 // the user.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/reconcile
-func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ValkeyClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
 	// TODO(user): your logic here
@@ -55,9 +55,9 @@ func (r *RedisClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *RedisClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *ValkeyClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cachev1alpha1.RedisCluster{}).
-		Named("rediscluster").
+		For(&cachev1alpha1.ValkeyCluster{}).
+		Named("valkeycluster").
 		Complete(r)
 }

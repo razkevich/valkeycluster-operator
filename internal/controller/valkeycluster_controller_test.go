@@ -27,10 +27,10 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cachev1alpha1 "github.com/razkevich/rediscluster-operator/api/v1alpha1"
+	cachev1alpha1 "github.com/razkevich/valkeycluster-operator/api/v1alpha1"
 )
 
-var _ = Describe("RedisCluster Controller", func() {
+var _ = Describe("ValkeyCluster Controller", func() {
 	Context("When reconciling a resource", func() {
 		const (
 			resourceName      = "test-resource"
@@ -43,13 +43,13 @@ var _ = Describe("RedisCluster Controller", func() {
 			Name:      resourceName,
 			Namespace: resourceNamespace,
 		}
-		rediscluster := &cachev1alpha1.RedisCluster{}
+		valkeycluster := &cachev1alpha1.ValkeyCluster{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind RedisCluster")
-			err := k8sClient.Get(ctx, typeNamespacedName, rediscluster)
+			By("creating the custom resource for the Kind ValkeyCluster")
+			err := k8sClient.Get(ctx, typeNamespacedName, valkeycluster)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &cachev1alpha1.RedisCluster{
+				resource := &cachev1alpha1.ValkeyCluster{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: resourceNamespace,
@@ -62,16 +62,16 @@ var _ = Describe("RedisCluster Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &cachev1alpha1.RedisCluster{}
+			resource := &cachev1alpha1.ValkeyCluster{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance RedisCluster")
+			By("Cleanup the specific resource instance ValkeyCluster")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &RedisClusterReconciler{
+			controllerReconciler := &ValkeyClusterReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}

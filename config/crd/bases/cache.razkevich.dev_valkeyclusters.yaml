@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: redisclusters.cache.razkevich.dev
+  name: valkeyclusters.cache.razkevich.dev
 spec:
   group: cache.razkevich.dev
   names:
-    kind: RedisCluster
-    listKind: RedisClusterList
-    plural: redisclusters
-    singular: rediscluster
+    kind: ValkeyCluster
+    listKind: ValkeyClusterList
+    plural: valkeyclusters
+    singular: valkeycluster
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -27,7 +27,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: RedisCluster is the Schema for the redisclusters API
+        description: ValkeyCluster is the Schema for the valkeyclusters API
         properties:
           apiVersion:
             description: |-
@@ -47,26 +47,26 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of RedisCluster
+            description: spec defines the desired state of ValkeyCluster
             properties:
               image:
-                default: redis:7
-                description: image is the Redis container image to run.
+                default: valkey/valkey:8
+                description: image is the Valkey container image to run.
                 type: string
               replicas:
                 default: 3
-                description: replicas is the desired number of Redis nodes in the
+                description: replicas is the desired number of Valkey nodes in the
                   cluster.
                 format: int32
                 minimum: 1
                 type: integer
             type: object
           status:
-            description: status defines the observed state of RedisCluster
+            description: status defines the observed state of ValkeyCluster
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the RedisCluster resource.
+                  conditions represent the current state of the ValkeyCluster resource.
                   Each condition has a unique type and reflects the status of a specific aspect of the resource.
 
                   Standard condition types include:
@@ -134,7 +134,7 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               readyReplicas:
-                description: readyReplicas is the number of Redis nodes currently
+                description: readyReplicas is the number of Valkey nodes currently
                   ready.
                 format: int32
                 type: integer

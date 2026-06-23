@@ -6,8 +6,8 @@ cliVersion: 4.15.0
 domain: razkevich.dev
 layout:
 - go.kubebuilder.io/v4
-projectName: rediscluster
-repo: github.com/razkevich/rediscluster-operator
+projectName: valkeycluster
+repo: github.com/razkevich/valkeycluster-operator
 resources:
 - api:
     crdVersion: v1
@@ -15,7 +15,7 @@ resources:
   controller: true
   domain: razkevich.dev
   group: cache
-  kind: RedisCluster
-  path: github.com/razkevich/rediscluster-operator/api/v1alpha1
+  kind: ValkeyCluster
+  path: github.com/razkevich/valkeycluster-operator/api/v1alpha1
   version: v1alpha1
 version: "3"

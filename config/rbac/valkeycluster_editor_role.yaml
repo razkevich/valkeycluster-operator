@@ -1,4 +1,4 @@
-# This rule is not used by the project rediscluster itself.
+# This rule is not used by the project valkeycluster itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
 # Grants permissions to create, update, and delete resources within the cache.razkevich.dev.
@@ -9,14 +9,14 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   labels:
-    app.kubernetes.io/name: rediscluster
+    app.kubernetes.io/name: valkeycluster
     app.kubernetes.io/managed-by: kustomize
-  name: rediscluster-editor-role
+  name: valkeycluster-editor-role
 rules:
 - apiGroups:
   - cache.razkevich.dev
   resources:
-  - redisclusters
+  - valkeyclusters
   verbs:
   - create
   - delete
@@ -28,6 +28,6 @@ rules:
 - apiGroups:
   - cache.razkevich.dev
   resources:
-  - redisclusters/status
+  - valkeyclusters/status
   verbs:
   - get

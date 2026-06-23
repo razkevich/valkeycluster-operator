@@ -7,7 +7,7 @@ rules:
 - apiGroups:
   - cache.razkevich.dev
   resources:
-  - redisclusters
+  - valkeyclusters
   verbs:
   - create
   - delete
@@ -19,13 +19,13 @@ rules:
 - apiGroups:
   - cache.razkevich.dev
   resources:
-  - redisclusters/finalizers
+  - valkeyclusters/finalizers
   verbs:
   - update
 - apiGroups:
   - cache.razkevich.dev
   resources:
-  - redisclusters/status
+  - valkeyclusters/status
   verbs:
   - get
   - patch

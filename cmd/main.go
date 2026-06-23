@@ -35,8 +35,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	cachev1alpha1 "github.com/razkevich/rediscluster-operator/api/v1alpha1"
-	"github.com/razkevich/rediscluster-operator/internal/controller"
+	cachev1alpha1 "github.com/razkevich/valkeycluster-operator/api/v1alpha1"
+	"github.com/razkevich/valkeycluster-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -178,11 +178,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.RedisClusterReconciler{
+	if err := (&controller.ValkeyClusterReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "rediscluster")
+		setupLog.Error(err, "Failed to create controller", "controller", "valkeycluster")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
