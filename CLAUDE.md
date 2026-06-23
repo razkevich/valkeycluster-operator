@@ -1,4 +1,6 @@
 <!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
+Active feature: ValkeyCluster operator. For technologies, project structure, and
+architecture decisions, read `specs/001-valkeycluster-operator/plan.md` (with the
+spec, research, data-model, and contracts/ alongside it). Constitution:
+`.specify/memory/constitution.md`.
 <!-- SPECKIT END -->
