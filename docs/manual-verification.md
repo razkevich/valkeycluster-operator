@@ -42,8 +42,8 @@ directly. Reproduce with [quickstart.md](https://github.com/razkevich/valkeyclus
   (spins its own kind cluster; set `CERT_MANAGER_INSTALL_SKIP=true` — the operator has no webhooks).
   The reconcile decision logic is additionally covered by envtest with a fake cluster.
 
-  Latest full run: `SUCCESS! 7 Passed | 0 Failed` in ~301s (provision 54s, failover 7s, reshard
-  3→5 95s, replica scaling <1s, scale-in 5→3 76s, plus the manager/metrics smoke specs).
+  Latest full run: `SUCCESS! 7 Passed | 0 Failed` in ~225s (provision 52s, failover 17s, reshard
+  3→5 52s, replica scaling 31s, scale-in 5→3 35s, plus the manager/metrics smoke specs).
 - For a quick, human-readable smoke test against an **already-running** cluster, `bench/day2-matrix.sh`
   drives provision → scale-out 5 → scale-in 3 and reports read/write hit counts at every pivot
   (including live writes mid-reshard).

@@ -19,10 +19,11 @@ spec:
   image: valkey/valkey:8
   storage:
     size: 1Gi
+  persistence:
+    appendFsync: everysec
   haPolicy:            # performance / HA tuning — see docs/settings.md
     minReplicasToWrite: 0
     requireFullCoverage: true
-    appendFsync: everysec
     clusterNodeTimeoutMillis: 5000
 ```
 

@@ -195,10 +195,10 @@
           <div>
             <ul class="points">
               <li><b>Topology</b> — <code>shards</code> &times; <code>replicasPerShard</code>: capacity, write scale-out, HA copies.</li>
-              <li><b>haPolicy</b> — availability ↔ consistency: write-safety gate, full-coverage, failover speed.</li>
+              <li><b>resources</b> — capacity: <code>limits.memory</code> sets <code>maxmemory</code> (~70%); <code>image</code>/<code>storage</code> are plumbing.</li>
               <li><b>persistence</b> — durability ↔ throughput: AOF / RDB / None, fsync cadence.</li>
               <li><b>performance</b> — throughput ↔ memory: io-threads, eviction policy.</li>
-              <li><b>resources</b> — capacity: <code>limits.memory</code> sets <code>maxmemory</code> (~70%); <code>image</code>/<code>storage</code> are plumbing.</li>
+              <li><b>haPolicy</b> — availability ↔ consistency: write-safety gate, full-coverage, failover speed.</li>
             </ul>
             <div class="say"><span class="k">What actually matters</span><p>Two numbers are the minimum; the policy axes are the substance — real Valkey levers with real tradeoffs, each quantified in the benchmark (detailed next).</p></div>
           </div>
@@ -208,7 +208,7 @@
 
     <section class="slide" data-eyebrow="Redis/Valkey cluster model · the foundation">
       <div class="wrap">
-        <h2>Slots, quorum, and an honest data-loss window</h2>
+        <h2>Slots, quorum, and asynchronous replication</h2>
         <ul class="points">
           <li><b>16384 hash slots</b>; <code>slot = CRC16(key) mod 16384</code>. Each primary owns a range; together they cover all of them.</li>
           <li>Failover is a <b>vote among primaries</b> → you need <b>≥3</b> (with 2 there's no majority). The CRD rejects <code>shards: 2</code>.</li>
@@ -223,42 +223,29 @@
       <div class="wrap">
         <h2>The levers, and their tradeoffs</h2>
         <table>
-          <tr><th>CR field</th><th>Valkey directive</th><th>Tradeoff</th></tr>
-          <tr><td><code>minReplicasToWrite</code></td><td>min-replicas-to-write</td><td>durability ↑ / write-availability ↓</td></tr>
-          <tr><td><code>requireFullCoverage</code></td><td>cluster-require-full-coverage</td><td>correctness ↑ / availability ↓</td></tr>
-          <tr><td><code>clusterNodeTimeoutMillis</code></td><td>cluster-node-timeout</td><td>fast failover / false positives</td></tr>
-          <tr><td><code>appendFsync</code></td><td>appendfsync</td><td>durability ↑ / throughput ↓</td></tr>
-          <tr><td><code>ioThreads</code></td><td>io-threads</td><td>throughput ↑ / CPU ↑ (Valkey-8 lever)</td></tr>
-          <tr><td><code>maxmemoryPolicy</code></td><td>maxmemory-policy</td><td>datastore (noeviction) vs cache (lfu)</td></tr>
+          <tr><th>CR field</th><th>Valkey directive</th><th>What it controls</th></tr>
+          <tr><td><code>minReplicasToWrite</code></td><td>min-replicas-to-write</td><td>refuse writes unless ≥N replicas are connected (shrinks the data-loss window)</td></tr>
+          <tr><td><code>requireFullCoverage</code></td><td>cluster-require-full-coverage</td><td>reject all commands if any slot is unowned — vs. keep serving the reachable slots</td></tr>
+          <tr><td><code>clusterNodeTimeoutMillis</code></td><td>cluster-node-timeout</td><td>how long a primary may be silent before a replica is promoted</td></tr>
+          <tr><td><code>appendFsync</code></td><td>appendfsync</td><td>AOF flush cadence: every write (always) · ≤1s (everysec) · OS-decides (no)</td></tr>
+          <tr><td><code>ioThreads</code></td><td>io-threads</td><td>network I/O threads (Valkey-8); command execution stays single-threaded</td></tr>
+          <tr><td><code>maxmemoryPolicy</code></td><td>maxmemory-policy</td><td>at maxmemory: reject writes (noeviction) or evict (allkeys-lru/lfu)</td></tr>
         </table>
         <p style="margin:1rem 0 0;color:var(--muted);font-size:.95rem;"><b style="color:var(--text)">Left at Valkey defaults</b> (deliberate scope): <code>min-replicas-max-lag</code>, <code>cluster-replica-validity-factor</code>, <code>cluster-migration-barrier</code> — the first two are the candidates to promote to CRD fields to make the HA story airtight.</p>
         <div class="say"><span class="k">Quantified</span><p>Benchmarks measure each: throughput vs shard count · <code>WAIT</code> durability cost (3.3s→5.4s) · failover window vs node-timeout (5s→~1.6s) · io-threads sweep.</p></div>
       </div>
     </section>
 
-    <section class="slide" data-eyebrow="Follow-up · cache that must stay up, data loss OK">
+    <section class="slide" data-eyebrow="Settings · choosing a tradeoff profile">
       <div class="wrap">
-        <h2>Drop durability, buy availability, spend on speed</h2>
-        <div class="grid cols-2" style="align-items:start;">
-          <div class="card">
-            <h3>The CR</h3>
-            <ul class="points">
-              <li><code>persistence: None</code> — no fork, no fsync, no COW spike → push <code>maxmemory</code> higher</li>
-              <li><code>requireFullCoverage: false</code> — serve the slots that are up <span style="color:var(--warm)">(the headline lever)</span></li>
-              <li><code>minReplicasToWrite: 0</code> — don't block writes for durability you don't want</li>
-              <li><code>maxmemoryPolicy: allkeys-lfu</code> — it's a cache; evict</li>
-            </ul>
-          </div>
-          <div class="card warm">
-            <h3>OS / node level</h3>
-            <ul class="points">
-              <li><b>Transparent Huge Pages off</b> — the #1 latency fix</li>
-              <li><b>Swap off</b> / swappiness 0</li>
-              <li><code>somaxconn</code> + tcp-backlog raised together; high fd limit</li>
-              <li><b>Guaranteed QoS</b> + <b>PodDisruptionBudget</b> so node drains keep quorum</li>
-            </ul>
-          </div>
-        </div>
+        <h2>Same operator, different tradeoffs</h2>
+        <table>
+          <tr><th>Profile</th><th>persistence</th><th>writes (haPolicy)</th><th>at maxmemory</th><th>biases toward</th></tr>
+          <tr><td><b>Cache</b><br>stay up, lose-OK</td><td><code>None</code></td><td>minReplicasToWrite&nbsp;0<br>requireFullCoverage&nbsp;false</td><td><code>allkeys-lfu</code></td><td>availability + speed</td></tr>
+          <tr><td><b>Balanced</b><br>default</td><td>AOF <code>everysec</code></td><td>minReplicasToWrite&nbsp;1<br>requireFullCoverage&nbsp;true</td><td><code>noeviction</code></td><td>sane middle</td></tr>
+          <tr><td><b>System of record</b><br>don't lose writes</td><td>AOF+RDB<br><code>appendfsync always</code></td><td>minReplicasToWrite&nbsp;1 + <code>WAIT</code><br>requireFullCoverage&nbsp;true</td><td><code>noeviction</code></td><td>durability + consistency</td></tr>
+        </table>
+        <div class="say warm"><span class="k">The must-stay-up cache, at the node level</span><p>THP off (the #1 latency fix) · swap off · raise <code>somaxconn</code> + fd limit · Guaranteed QoS + a <b>PodDisruptionBudget</b> so node drains keep quorum.</p></div>
       </div>
     </section>
 
@@ -408,19 +395,6 @@ internal/
       </div>
     </section>
 
-    <section class="slide" data-eyebrow="The Valkey-on-Kubernetes details that matter">
-      <div class="wrap">
-        <h2>The things you only learn by running it</h2>
-        <ul class="points">
-          <li><b><code>CLUSTER MEET</code> needs an IP</b>, not a hostname — so resolve FQDN→IP for MEET while the node still <em>announces</em> its hostname.</li>
-          <li><b>Open-slot markers live only on the owning node's own line</b> — they're not gossiped, so detecting a stuck migration means querying every node.</li>
-          <li><b><code>SETSLOT</code> is rejected on replicas</b> — assert ownership on masters only.</li>
-          <li><b>Primary ≠ pod ordinal 0</b> after a failover — discover it via <code>CLUSTER MYID</code> + slot ownership.</li>
-        </ul>
-        <div class="say"><span class="k">Why it matters</span><p>This is where running a clustering operator differs from reading about one — and where the unit tests were green but the cluster wasn't.</p></div>
-      </div>
-    </section>
-
     <section class="slide" data-eyebrow="Resharding · the marquee day-2 op">
       <div class="wrap">
         <h2>Resharding moves <span class="q">slots</span>, not keys</h2>
@@ -430,21 +404,7 @@ internal/
           <li>Resharding = rewriting <b>slot → primary</b> ownership to rebalance when shards are added or removed.</li>
           <li><b>Data-preserving</b>: a key requested mid-move is redirected to the new owner.</li>
         </ul>
-        <div class="say"><span class="k">Move slots, not keys</span><p>You're rewriting the routing map; the keys move as a side effect. Done natively in Go for determinism — <code>valkey-cli reshard</code> refuses on uneven/interrupted states — in bounded, resumable batches.</p></div>
-      </div>
-    </section>
-
-    <section class="slide" data-eyebrow="Robustness · found by stress-testing, fixed at root cause">
-      <div class="wrap">
-        <h2>Made robust the hard way</h2>
-        <table>
-          <tr><th>Edge case found</th><th>Fix</th></tr>
-          <tr><td>Config edits (ioThreads…) silently inert</td><td><span class="ok">config-hash → rolling restart</span></td></tr>
-          <tr><td>Dead/<code>fail</code> nodes stall observation</td><td><span class="ok">skip them + bounded dial timeout</span></td></tr>
-          <tr><td>Scale-out wedges on uneven distribution</td><td><span class="ok">native MoveSlots (not valkey-cli)</span></td></tr>
-          <tr><td>Scale-out <code>NOREPLICAS</code> at min-replicas≥1</td><td><span class="ok">attach replicas before moving slots</span></td></tr>
-        </table>
-        <div class="say"><span class="k">How they were found</span><p>Each surfaced by deliberately stressing the operator — multiple clusters, mid-reshard topology flips — then fixed at the root cause and pinned with a regression test. Changing the desired topology mid-reshard now converges with zero data loss.</p></div>
+        <div class="say"><span class="k">Move slots, not keys</span><p>You're rewriting the routing map; the keys move as a side effect. It's data-preserving and converges from any starting distribution.</p></div>
       </div>
     </section>
 
@@ -492,8 +452,7 @@ internal/
         <p class="lead" style="max-width:62ch;font-size:clamp(1.1rem,1.9vw,1.4rem);color:#E8EBF2;">
           A Kubernetes operator for Valkey Cluster. You declare shards and replicas-per-shard; it reconciles a real, sharded, HA cluster — one StatefulSet per shard, hostname identity that survives restarts, data-preserving resharding when you change the topology. A pure <span style="color:var(--accent)">Decide</span> function picks one action; a <span style="color:var(--accent-2)">ClusterAdmin</span> interface carries it out. The interesting tradeoffs are exposed as knobs and quantified in a benchmark. Built spec-first, cross-checked against KubeBlocks, and hardened by stressing it until it broke — then fixing the root cause.
         </p>
-        <p style="margin:1.1rem 0 0;color:var(--muted);font-size:.95rem;"><b style="color:var(--text)">Deliberately bounded</b> — out by design: rolling upgrades, vertical scaling, volume expansion, backup/restore, TLS/ACL, Sentinel (<code>shards: 1</code> is the HA-only case), a proxy, a metrics stack.</p>
-        <div style="margin-top:1rem;">
+        <div style="margin-top:1.4rem;">
           <span class="pill">repo · razkevich/valkeycluster-operator</span>
           <span class="pill">docs · razkevich.github.io</span>
           <span class="pill">spec-kit · specs/</span>

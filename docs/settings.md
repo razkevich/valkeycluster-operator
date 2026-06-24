@@ -100,13 +100,10 @@ spec:
     clusterNodeTimeoutMillis: 5000
 ```
 
-Why: `persistence: None` removes the fork and fsync (the biggest tail-latency sources) and the
-copy-on-write memory spike — so `maxmemory` can sit closer to the container limit. `requireFullCoverage:
-false` keeps the reachable slots serving during a partial outage instead of failing the whole cluster.
-`minReplicasToWrite: 0` avoids trading availability for durability you've opted out of. Replicas are
-still kept (for failover, not durability), with a `PodDisruptionBudget` and anti-affinity so node
-drains don't break a shard. At the runtime level this profile also benefits from `lazyfree-lazy-*`
-(non-blocking eviction of big keys) and `replica-read-only` reads for read-scaling.
+The non-obvious parts: with no persistence there's no fork, so `maxmemory` can sit closer to the
+limit; replicas stay (for failover, not durability) behind a `PodDisruptionBudget` + anti-affinity so
+node drains keep quorum; and the runtime benefits from `lazyfree-lazy-*` (non-blocking eviction) and
+reading from replicas for read-scaling.
 
 ## What the benchmark shows
 
