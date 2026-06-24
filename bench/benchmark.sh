@@ -18,6 +18,14 @@ OUT="$(dirname "$0")/RESULTS.md"
 
 kx() { kubectl exec -n "$NS" "$POD" -- "$@"; }
 
+# Fail fast with a clear message if the cluster isn't there (otherwise the benchmark
+# pipes below fail cryptically).
+if [ -z "$(kubectl get valkeycluster "$CR" -n "$NS" -o jsonpath='{.status.phase}' 2>/dev/null)" ]; then
+  echo "ValkeyCluster '$CR' not found in namespace '$NS' (context: $(kubectl config current-context))." >&2
+  echo "Deploy it first, or pass the right name:  $(basename "$0") <name> [namespace]" >&2
+  exit 1
+fi
+
 shards=$(kubectl get valkeycluster "$CR" -n "$NS" -o jsonpath='{.spec.shards}')
 replicas=$(kubectl get valkeycluster "$CR" -n "$NS" -o jsonpath='{.spec.replicasPerShard}')
 
@@ -33,6 +41,21 @@ wait_ms=$(kx sh -c 'start=$(date +%s%N); for i in $(seq 1 2000); do valkey-cli -
 
 {
   echo "# Benchmark results"
+  echo
+  echo "## What this measures"
+  echo
+  echo "Raw cluster throughput and the durability-vs-latency cost of replica-acked writes, on a"
+  echo "live ValkeyCluster — the baseline numbers behind the performance discussion."
+  echo
+  echo "## How it was tested"
+  echo
+  echo "- Run from **inside a cluster pod** (\`$POD\`) so the client speaks the cluster protocol and"
+  echo "  follows \`MOVED\` redirects across shards."
+  echo "- **Throughput:** \`valkey-benchmark --cluster -t set/get -n $N -c $C\` (requests/sec)."
+  echo "- **Durability vs latency:** 2000 sequential \`SET\`s, plain vs. each followed by \`WAIT 1 100\`"
+  echo "  (block until 1 replica acks), measuring the per-write cost of shrinking the data-loss window."
+  echo
+  echo "## Results"
   echo
   echo "Topology: **shards=$shards, replicasPerShard=$replicas**, $N requests, $C clients."
   echo

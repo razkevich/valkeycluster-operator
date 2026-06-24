@@ -7,7 +7,7 @@
 # prove the cluster keeps serving and preserves data through each operation.
 #
 # This is the quick, human-readable harness used during development. The asserted,
-# CI-grade version lives in the Ginkgo suite (test/e2e/valkeycluster_test.go,
+# CI-grade version lives in the std-testing e2e suite (test/e2e/valkeycluster_test.go,
 # `make test-e2e`); use this when you want to watch a real cluster move in real
 # time against an existing operator install.
 #
@@ -17,21 +17,47 @@
 #
 # Usage:
 #   bench/day2-matrix.sh
-#   NAME=try CTX=kind-valkeycluster-dev CR=try/valkeycluster.yaml bench/day2-matrix.sh
+#   NAME=try CTX=kind-valkeycluster-dev bench/day2-matrix.sh
 #
 # Env (with defaults):
 #   NAME  ValkeyCluster name + StatefulSet prefix   (default: try)
 #   CTX   kubectl context                           (default: kind-valkeycluster-dev)
-#   CR    manifest to apply for the 3-shard base    (default: try/valkeycluster.yaml)
+#   CR    optional manifest to apply for the base    (default: generated inline from NAME)
 #
+# This script manages its own throwaway cluster named $NAME (clean start -> provision
+# -> scale-out -> scale-in), so it won't disturb other ValkeyClusters. By default it
+# generates the base manifest inline; set CR=path/to.yaml to apply your own.
 set -uo pipefail
 
 NAME="${NAME:-try}"
 CTX="${CTX:-kind-valkeycluster-dev}"
-CR="${CR:-try/valkeycluster.yaml}"
+CR="${CR:-}"
 SEED="${NAME}-shard-0-0"
 
 ns() { kubectl config use-context "$CTX" >/dev/null 2>&1; }
+
+# apply_base applies the 3-shard base: a CR file if one was provided, else a manifest
+# generated inline from $NAME (so there's no dependency on a checked-in file).
+apply_base() {
+  ns
+  if [ -n "$CR" ] && [ -f "$CR" ]; then
+    kubectl apply -f "$CR" >/dev/null 2>&1
+    return
+  fi
+  kubectl apply -f - >/dev/null 2>&1 <<EOF
+apiVersion: cache.razkevich.dev/v1alpha1
+kind: ValkeyCluster
+metadata:
+  name: ${NAME}
+  namespace: default
+spec:
+  shards: 3
+  replicasPerShard: 2
+  image: valkey/valkey:8
+  storage:
+    size: 512Mi
+EOF
+}
 
 # write_range LO HI — set key:i=val:i for i in [LO,HI] via a cluster-mode client,
 # verifying each SET and retrying on transient CLUSTERDOWN.
@@ -93,7 +119,7 @@ for ((n=1;n<=20;n++)); do [ "$(kubectl get pods --no-headers 2>/dev/null | grep 
 echo "cleaned. pods=$(kubectl get pods --no-headers 2>/dev/null | grep -c "$NAME-shard")"
 
 echo "############ PIVOT 0: PROVISION 3 ############"
-kubectl apply -f "$CR" >/dev/null 2>&1
+apply_base
 wait_ready 3 9 14 || exit 1
 write_range 1 100
 read_check 100
