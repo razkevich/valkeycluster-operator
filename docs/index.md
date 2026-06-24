@@ -58,7 +58,7 @@ flowchart LR
   OBS["Observe<br/>CLUSTER INFO / NODES"] --> DEC["Decide<br/>internal/topology"]
   DEC --> ACT{"Action?"}
   ACT -->|not formed| FORM["Form cluster"]
-  ACT -->|shards up| OUT["Scale-out<br/>targeted reshard"]
+  ACT -->|shards up| OUT["Scale-out<br/>native MoveSlots"]
   ACT -->|shards down| IN["Scale-in<br/>native MoveSlots + teardown"]
   ACT -->|open slots| REP["RepairSlots"]
   ACT -->|replicas changed| RPL["Adjust replicas"]
@@ -74,10 +74,10 @@ flowchart LR
 
 | If you want to… | Read |
 |---|---|
-| Understand the design end-to-end | [Architecture](walkthrough.md) |
+| Tune performance and availability (levers, tradeoffs, cache profile) | [Performance & HA](settings.md) |
+| Understand how it's built | [Architecture](walkthrough.md) |
+| The design decisions and how it differs from KubeBlocks | [Design Decisions & KubeBlocks](design-decisions.md) |
+| How the loop stays correct under failure | [Operator Best Practices & Edge Cases](reconcile-edge-cases.md) |
 | Operate a running cluster | [Day-2 Operations](day-2-operations.md) |
-| Understand the design decisions and how it differs from KubeBlocks | [Design Decisions & KubeBlocks](design-decisions.md) |
-| See how the loop stays correct under failure | [Operator Best Practices & Edge Cases](reconcile-edge-cases.md) |
-| Tune performance and availability (CR + OS levers, cache profile) | [Settings for Performance and High Availability](settings.md) |
 | See how it's tested | [Testing & Verification](manual-verification.md) |
 | How it was built with AI | [AI Development Methodology](ai-development.md) |

@@ -17,10 +17,9 @@ no I/O and returns one action, so the hard question — what to do next — read
 is unit-tested exhaustively. The messy part (talking to a live cluster) hides behind the
 `ClusterAdmin` interface, with an in-memory fake so the reconciler runs in envtest with no Valkey.
 
-**Reuse the CLI to grow; hand-roll the shrink.** Scale-out uses `valkey-cli --cluster reshard` —
-battle-tested, no reason to reinvent it. Scale-in doesn't: the CLI's drain refuses pre-checks, hits
-`BUSYKEY`, and times out mid-shrink. So the drain is a native, idempotent `MIGRATE … REPLACE` loop.
-It's the one place reimplementing beat reusing — because shrink needed determinism the CLI wouldn't give.
+**A native slot-mover.** Slot migration (scale-out *and* scale-in) is a native, idempotent
+`MIGRATE … REPLACE` loop. `valkey-cli --cluster reshard` refuses on uneven or interrupted
+distributions — which a topology change mid-reshard produces — so going native bought determinism.
 
 **Let Valkey do failover.** Quorum promotion already works; reimplementing it adds risk for nothing.
 The operator keeps the workloads alive and reports roles honestly — it doesn't play the algorithm.

@@ -58,10 +58,10 @@ markdown_extensions:
 
 nav:
   - Overview: index.md
+  - Performance & HA: settings.md
   - Architecture: walkthrough.md
-  - Day-2 Operations: day-2-operations.md
   - Design Decisions & KubeBlocks: design-decisions.md
-  - Settings for Performance & HA: settings.md
   - Operator Best Practices & Edge Cases: reconcile-edge-cases.md
+  - Day-2 Operations: day-2-operations.md
   - Testing & Verification: manual-verification.md
   - AI Development Methodology: ai-development.md

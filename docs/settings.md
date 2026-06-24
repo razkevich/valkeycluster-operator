@@ -23,6 +23,8 @@ So **sharding scales writes/capacity; replication buys availability/read-scaling
 - Replication is **always asynchronous** — a primary acks a write before its replicas have it. If it
   dies in that window, the acked write can be lost on promotion. This latency-vs-durability window is
   what the `haPolicy` knobs below tune.
+- **One role per node** — a node is a master (owns slots) or a replica of a single master, never both.
+  Unlike MongoDB, it can't be primary for some slots and replica for others.
 
 ## CR settings
 

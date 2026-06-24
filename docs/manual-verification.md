@@ -34,7 +34,7 @@ directly. Reproduce with [quickstart.md](https://github.com/razkevich/valkeyclus
 ## Notes
 - Two Valkey-on-Kubernetes details the operator handles: `CLUSTER MEET` requires an IP (it resolves
   FQDN → IP while nodes still announce their hostname), and scale-out uses a **targeted** reshard to
-  the new primary's node ID (not `rebalance --use-empty-masters`) so replica pods don't become
+  the new primary, never to empty masters, so replica pods don't become
   spurious primaries.
 - These flows are also covered by an **automated Ginkgo e2e suite** in
   `test/e2e/valkeycluster_test.go` (provision+use, failover, reshard 3→5, scale-in 5→3, replica

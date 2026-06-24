@@ -137,7 +137,7 @@
         <h2>One operator, every box checked</h2>
         <div class="grid cols-2">
           <div class="card">
-            <h3>What was asked</h3>
+            <h3>What was planned</h3>
             <ul class="points">
               <li>Operator that manages a <b>Valkey Cluster</b></li>
               <li>Users declare topology → operator reconciles</li>
@@ -157,6 +157,19 @@
           </div>
         </div>
         <div class="say"><span class="k">The approach</span><p>Small scope, done correctly and understood deeply — every requirement traceable to code and docs.</p></div>
+      </div>
+    </section>
+
+    <section class="slide" data-eyebrow="AI development methodology">
+      <div class="wrap">
+        <h2>Spec-driven, agent-assisted, cluster-verified</h2>
+        <ul class="points">
+          <li><b>GitHub Spec Kit</b> — constitution → spec → plan → tasks → implementation, all committed and auditable.</li>
+          <li><b>Superpowers (Claude Code agent skills)</b> for execution — structured brainstorming for design, parallel subagents for mechanical refactors and reviews, systematic debugging.</li>
+          <li>The <b>constitution</b> set five non-negotiables up front (test-first, truthful status, YAGNI) — a fixed rubric, not per-prompt debate.</li>
+          <li>A <b>testable seam</b> (ClusterAdmin + fake) verifies most changes in seconds; a real <b>kind cluster is the gate</b> — defects fixed at root cause and locked with a regression test.</li>
+        </ul>
+        <div class="say"><span class="k">The division of labor</span><p>AI gave leverage on scaffolding and boilerplate; human judgment owned the correctness-critical parts — the consistency tradeoffs, migrate-before-remove ordering, and the gotchas that only surfaced live.</p></div>
       </div>
     </section>
 
@@ -218,19 +231,8 @@
           <tr><td><code>ioThreads</code></td><td>io-threads</td><td>throughput ↑ / CPU ↑ (Valkey-8 lever)</td></tr>
           <tr><td><code>maxmemoryPolicy</code></td><td>maxmemory-policy</td><td>datastore (noeviction) vs cache (lfu)</td></tr>
         </table>
+        <p style="margin:1rem 0 0;color:var(--muted);font-size:.95rem;"><b style="color:var(--text)">Left at Valkey defaults</b> (deliberate scope): <code>min-replicas-max-lag</code>, <code>cluster-replica-validity-factor</code>, <code>cluster-migration-barrier</code> — the first two are the candidates to promote to CRD fields to make the HA story airtight.</p>
         <div class="say"><span class="k">Quantified</span><p>Benchmarks measure each: throughput vs shard count · <code>WAIT</code> durability cost (3.3s→5.4s) · failover window vs node-timeout (5s→~1.6s) · io-threads sweep.</p></div>
-      </div>
-    </section>
-
-    <section class="slide" data-eyebrow="HA depth · what's left at defaults">
-      <div class="wrap">
-        <h2>What I'd reach for next (and know cold)</h2>
-        <ul class="points">
-          <li><code>min-replicas-max-lag</code> (10s) — the lag bound that companions <code>min-replicas-to-write</code>; the gate is meaningless without it.</li>
-          <li><code>cluster-replica-validity-factor</code> — may a <b>stale</b> replica promote? availability vs data-recency.</li>
-          <li><code>cluster-migration-barrier</code> / allow-replica-migration — auto-cover an orphaned primary.</li>
-        </ul>
-        <div class="say"><span class="k">Deliberate scope</span><p>The headline failover/durability levers are exposed; these second-order ones run at Valkey defaults — and the first two are the candidates to promote to CRD fields to make the HA story airtight.</p></div>
       </div>
     </section>
 
@@ -324,6 +326,33 @@
       </div>
     </section>
 
+    <section class="slide" data-eyebrow="Internals · code map &amp; stack">
+      <div class="wrap">
+        <h2>The code, and the stack</h2>
+        <div class="grid cols-2" style="align-items:start;">
+          <pre>cmd/main.go        wires + starts the manager
+api/v1alpha1/      CRD types — the contract
+internal/
+  topology/  <span class="cm">(pure)  Decide() — the brain (100% tested)</span>
+  slots/     <span class="cm">(pure)  hash-slot math</span>
+  cluster/   <span class="cm">ClusterAdmin: go-redis + pod-exec + fake</span>
+  resources/ <span class="cm">StatefulSet/Service/ConfigMap builders</span>
+  controller/<span class="cm"> the reconcile loop:</span>
+    <span class="cm">reconcile · scaling · membership · status</span></pre>
+          <div class="card">
+            <h3>Built with</h3>
+            <ul class="points">
+              <li><b>Go</b> + <b>controller-runtime</b> (Kubebuilder v4)</li>
+              <li><b>go-redis/v9</b> — Valkey-compatible CLUSTER client</li>
+              <li><b>valkey-cli</b> via Kubernetes <b>pod-exec</b></li>
+              <li><b>envtest</b> (API server) · <b>kind</b> + <b>Ginkgo</b> e2e</li>
+            </ul>
+            <p style="margin:.8rem 0 0;color:var(--muted);font-size:.92rem;">Read three: <code>valkeycluster_types.go</code> (API) · <code>topology.go</code> (the decision) · <code>goredis.go</code> (cluster ops).</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="slide" data-eyebrow="Design decisions">
       <div class="wrap">
         <h2>The choices that matter</h2>
@@ -395,22 +424,13 @@
     <section class="slide" data-eyebrow="Resharding · the marquee day-2 op">
       <div class="wrap">
         <h2>Resharding moves <span class="q">slots</span>, not keys</h2>
-        <div class="grid cols-2" style="align-items:start;">
-          <div>
-            <ul class="points">
-              <li>A key's slot is <b>fixed</b>: <code>slot = CRC16(key) mod 16384</code>, and routing is purely by slot → owner.</li>
-              <li>So you <b>can't relocate data by moving keys</b> — clients would still route to the slot's owner. You transfer the <b>slot</b>; its keys come along.</li>
-              <li>Resharding = rewriting <b>slot → primary</b> ownership to rebalance when shards are added or removed.</li>
-              <li>Data-preserving; a key requested mid-move gets an <code>ASK</code> redirect to the target.</li>
-            </ul>
-          </div>
-          <pre><span class="cm"># per slot s, idempotently:</span>
-SETSLOT s IMPORTING  <span class="cm">→ target</span>
-SETSLOT s MIGRATING  <span class="cm">→ source</span>
-MIGRATE keys  source → target   <span class="cm"># empty: skip</span>
-SETSLOT s NODE target  <span class="cm"># on every master</span></pre>
-        </div>
-        <div class="say"><span class="k">Move slots, not keys</span><p>You're rewriting the routing map; the keys move as a side effect. Done natively in Go for determinism — <code>valkey-cli reshard</code> refuses on uneven/interrupted states — in bounded batches that resume after a crash.</p></div>
+        <ul class="points">
+          <li>A key's slot is <b>fixed</b>: <code>slot = CRC16(key) mod 16384</code>, and routing is purely by slot → owner.</li>
+          <li>So you <b>can't relocate data by moving keys</b> — clients would still route to the slot's owner. You transfer the <b>slot</b>; its keys come along.</li>
+          <li>Resharding = rewriting <b>slot → primary</b> ownership to rebalance when shards are added or removed.</li>
+          <li><b>Data-preserving</b>: a key requested mid-move is redirected to the new owner.</li>
+        </ul>
+        <div class="say"><span class="k">Move slots, not keys</span><p>You're rewriting the routing map; the keys move as a side effect. Done natively in Go for determinism — <code>valkey-cli reshard</code> refuses on uneven/interrupted states — in bounded, resumable batches.</p></div>
       </div>
     </section>
 
@@ -466,39 +486,19 @@ SETSLOT s NODE target  <span class="cm"># on every master</span></pre>
       </div>
     </section>
 
-    <section class="slide" data-eyebrow="AI development methodology">
-      <div class="wrap">
-        <h2>Spec-driven, verified on a real cluster</h2>
-        <ul class="points">
-          <li><b>GitHub Spec Kit</b>: constitution → spec → plan → tasks → implementation, all committed and auditable.</li>
-          <li>The <b>constitution</b> set five non-negotiables up front (test-first, truthful status, YAGNI) — a fixed rubric, not per-prompt debate.</li>
-          <li>A <b>testable seam by design</b> (ClusterAdmin + fake) so most changes verify in seconds.</li>
-          <li>Real <b>kind cluster as a first-class gate</b>: defects get fixed at root cause and locked with a regression test.</li>
-        </ul>
-        <div class="say"><span class="k">The division of labor</span><p>AI gave leverage on scaffolding and boilerplate; human judgment owned the correctness-critical parts — the consistency tradeoffs, migrate-before-remove ordering, and the gotchas that only surfaced live.</p></div>
-      </div>
-    </section>
-
-    <section class="slide" data-eyebrow="Scope &amp; where everything lives">
-      <div class="wrap">
-        <h2>Deliberately bounded</h2>
-        <p class="lead" style="max-width:60ch;">In scope: sharding, replication, data-preserving resharding, failover, truthful status. Out by design: rolling upgrades, vertical scaling, volume expansion, backup/restore, TLS/ACL, Sentinel (cluster-mode failover covers HA; <code>shards: 1</code> is the HA-only case), a proxy, and a metrics stack.</p>
-        <div style="margin-top:1.6rem;">
-          <span class="pill">repo · razkevich/valkeycluster-operator</span>
-          <span class="pill">docs · razkevich.github.io</span>
-          <span class="pill">spec-kit · specs/</span>
-          <span class="pill">bench · bench/</span>
-        </div>
-        <div class="say"><span class="k">The principle</span><p>A smaller surface done correctly and understood deeply beats an ambitious half-built operator — and it's the honest answer to the brief.</p></div>
-      </div>
-    </section>
-
     <section class="slide" data-eyebrow="In one breath">
       <div class="wrap">
         <h2>The 60-second version</h2>
         <p class="lead" style="max-width:62ch;font-size:clamp(1.1rem,1.9vw,1.4rem);color:#E8EBF2;">
           A Kubernetes operator for Valkey Cluster. You declare shards and replicas-per-shard; it reconciles a real, sharded, HA cluster — one StatefulSet per shard, hostname identity that survives restarts, data-preserving resharding when you change the topology. A pure <span style="color:var(--accent)">Decide</span> function picks one action; a <span style="color:var(--accent-2)">ClusterAdmin</span> interface carries it out. The interesting tradeoffs are exposed as knobs and quantified in a benchmark. Built spec-first, cross-checked against KubeBlocks, and hardened by stressing it until it broke — then fixing the root cause.
         </p>
+        <p style="margin:1.1rem 0 0;color:var(--muted);font-size:.95rem;"><b style="color:var(--text)">Deliberately bounded</b> — out by design: rolling upgrades, vertical scaling, volume expansion, backup/restore, TLS/ACL, Sentinel (<code>shards: 1</code> is the HA-only case), a proxy, a metrics stack.</p>
+        <div style="margin-top:1rem;">
+          <span class="pill">repo · razkevich/valkeycluster-operator</span>
+          <span class="pill">docs · razkevich.github.io</span>
+          <span class="pill">spec-kit · specs/</span>
+          <span class="pill">bench · bench/</span>
+        </div>
         <div class="say"><span class="k">Likely questions</span><p>Synchronous replication? · what if the operator dies mid-reshard? · why not KubeBlocks? · what's missing? — each addressed in the preceding slides.</p></div>
       </div>
     </section>
