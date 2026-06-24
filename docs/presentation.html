@@ -162,30 +162,31 @@
     </section>
 
     <!-- 03 WHAT YOU DECLARE -->
-    <section class="slide" data-eyebrow="The API · declarative topology">
+    <section class="slide" data-eyebrow="The API · topology + the tradeoffs">
       <div class="wrap">
-        <h2>You declare two numbers</h2>
+        <h2>Topology sets the shape. The <span class="q">policy</span> sets the tradeoffs.</h2>
         <div class="grid cols-2" style="align-items:start;">
-          <pre><span class="kw">apiVersion</span>: cache.razkevich.dev/v1alpha1
-<span class="kw">kind</span>: ValkeyCluster
-<span class="kw">spec</span>:
+          <pre><span class="kw">spec</span>:
+  <span class="cm"># shape</span>
   <span class="nm">shards</span>: 3            <span class="cm"># 1 or &gt;=3 (quorum)</span>
   <span class="nm">replicasPerShard</span>: 2  <span class="cm"># HA copies</span>
-  persistence: { mode: <span class="st">AOFAndRDB</span> }
-  performance: { ioThreads: 2 }
+  <span class="cm"># durability ↔ throughput</span>
+  persistence: { mode: <span class="st">AOFAndRDB</span>, appendFsync: <span class="st">everysec</span> }
+  <span class="cm"># throughput ↔ memory</span>
+  performance: { ioThreads: 2, maxmemoryPolicy: <span class="st">noeviction</span> }
+  <span class="cm"># availability ↔ consistency</span>
   haPolicy:
     minReplicasToWrite: 1
     requireFullCoverage: true
     clusterNodeTimeoutMillis: 5000</pre>
           <div>
             <ul class="points">
-              <li><b>Topology</b> is two numbers; everything else is optional tuning on three axes.</li>
-              <li>Status is the truth, derived from the live cluster every reconcile.</li>
-              <li>Monitoring surface is <code>kubectl</code> — no extra stack.</li>
+              <li><b>Topology</b> — <code>shards</code> &times; <code>replicasPerShard</code>: capacity, write scale-out, HA copies.</li>
+              <li><b>haPolicy</b> — availability ↔ consistency: the write-safety gate, full-coverage, failover speed.</li>
+              <li><b>persistence</b> — durability ↔ throughput: AOF / RDB / None, fsync cadence.</li>
+              <li><b>performance</b> — throughput ↔ memory: io-threads, eviction policy.</li>
             </ul>
-            <pre style="margin-top:1rem;">$ kubectl get valkeyclusters
-NAME  SHARDS  REPLICAS  PHASE  READY
-try   3       2         Ready  3</pre>
+            <div class="say"><span class="k">What actually matters</span><p>Two numbers are the minimum; the three policy axes are the substance — real Valkey levers with real tradeoffs, each quantified in the benchmark (detailed next).</p></div>
           </div>
         </div>
       </div>
