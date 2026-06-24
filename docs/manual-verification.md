@@ -40,7 +40,9 @@ directly. Reproduce with [quickstart.md](https://github.com/razkevich/valkeyclus
   `test/e2e/valkeycluster_test.go` — a single ordered `TestLifecycle` with subtests for
   provision+use, failover, reshard 3→5, replica scaling, and scale-in 5→3, run against a real
   Valkey cluster on Kind. Run it with `make test-e2e` (creates the kind cluster if absent; the
-  test installs/undeploys the operator and creates/deletes the CR itself). The reconcile decision
+  test installs the operator and creates the CR itself, and on teardown deletes just that
+  ValkeyCluster — leaving the operator installed, so the cluster stays usable for benchmarks).
+  The reconcile decision
   logic is additionally covered by **envtest** (`internal/controller`, also std `testing` with a
   fake cluster) — no real cluster needed, just `make setup-envtest` once.
 

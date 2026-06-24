@@ -55,6 +55,13 @@ func TestMain(m *testing.M) {
 }
 
 func setupSuite() error {
+	// Safety first: this suite deploys the operator and deletes pods, so it must
+	// target the Kind cluster — never a real cluster like EKS. Guard before the
+	// slow image build so a wrong context fails fast.
+	if err := ensureKindContext(); err != nil {
+		return err
+	}
+
 	if _, err := utils.Run(exec.Command("make", "docker-build", "IMG="+managerImage)); err != nil {
 		return fmt.Errorf("build manager image: %w", err)
 	}
@@ -85,4 +92,39 @@ func teardownSuite() {
 	if certManagerInstalled {
 		utils.UninstallCertManager()
 	}
+}
+
+// kindClusterName is the Kind cluster the suite targets (KIND_CLUSTER, default "kind").
+func kindClusterName() string {
+	if v := os.Getenv("KIND_CLUSTER"); v != "" {
+		return v
+	}
+	return "kind"
+}
+
+// ensureKindContext refuses to run e2e against anything but the Kind cluster — the
+// suite deploys the operator and deletes pods, so pointing it at a real cluster (e.g.
+// EKS) would be destructive. With E2E_USE_KIND_CONTEXT=true it switches to the Kind
+// context automatically (always safe, since the target is Kind); otherwise it aborts
+// with instructions when the current context doesn't match.
+func ensureKindContext() error {
+	want := "kind-" + kindClusterName()
+
+	if os.Getenv("E2E_USE_KIND_CONTEXT") == "true" {
+		if _, err := kubectl("config", "use-context", want); err != nil {
+			return fmt.Errorf("switch to kube context %q: %w", want, err)
+		}
+		return nil
+	}
+
+	cur, err := kubectl("config", "current-context")
+	if err != nil {
+		return fmt.Errorf("read current kube context: %w", err)
+	}
+	if cur != want {
+		return fmt.Errorf("refusing to run e2e: current kube context is %q, expected %q "+
+			"(the suite deploys the operator and deletes pods, so it must target Kind). "+
+			"Run `kubectl config use-context %s`, or set E2E_USE_KIND_CONTEXT=true", cur, want, want)
+	}
+	return nil
 }

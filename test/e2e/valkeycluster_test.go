@@ -188,8 +188,10 @@ func teardownDeployment(t *testing.T) {
 		t.Logf("KEEP_CLUSTER=true: leaving ValkeyCluster %q and the operator deployed for inspection", e2eName)
 		return
 	}
+	// Delete only the ValkeyCluster the suite created; leave the operator and CRD
+	// installed so the cluster stays usable afterward (e.g. for benchmarks) and
+	// re-runs are fast. `make test-e2e` tears down the whole Kind cluster separately.
 	_, _ = kubectl("delete", "valkeycluster", e2eName, "--ignore-not-found", "--wait=true", "--timeout=120s")
-	_, _ = utils.Run(exec.Command("make", "undeploy", "ignore-not-found=true"))
 }
 
 func stepProvision(t *testing.T) {

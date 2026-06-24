@@ -332,7 +332,7 @@ internal/
               <li><b>Go</b> + <b>controller-runtime</b> (Kubebuilder v4)</li>
               <li><b>go-redis/v9</b> — Valkey-compatible CLUSTER client</li>
               <li><b>valkey-cli</b> via Kubernetes <b>pod-exec</b></li>
-              <li><b>envtest</b> (API server) · <b>kind</b> + <b>Ginkgo</b> e2e</li>
+              <li><b>envtest</b> (API server) · <b>kind</b> e2e · Go std <b>testing</b></li>
             </ul>
             <p style="margin:.8rem 0 0;color:var(--muted);font-size:.92rem;">Read three: <code>valkeycluster_types.go</code> (API) · <code>topology.go</code> (the decision) · <code>goredis.go</code> (cluster ops).</p>
           </div>
@@ -425,22 +425,25 @@ internal/
 
     <section class="slide" data-eyebrow="Tests &amp; bench · verifying day-2">
       <div class="wrap">
-        <h2>Three layers, weighted to day-2</h2>
+        <h2>One framework, layered by what each test needs to run</h2>
         <div class="grid cols-2">
           <div>
             <ul class="points">
-              <li><b>Unit</b> — pure logic: slot math, the <code>Decide</code> planner, config render (topology 100%).</li>
-              <li><b>envtest</b> — the reconciler vs a real API server with the fake cluster.</li>
-              <li><b>kind e2e</b> — provision, failover, reshard 3→5, scale-in 5→3, replica scaling.</li>
-              <li><b>bench</b> — throughput, WAIT durability, failover window.</li>
+              <li><b>Unit</b> — pure logic, nothing to start: slot math, the <code>Decide</code> planner, config render (<code>topology</code> 100%).</li>
+              <li><b>envtest</b> — the reconciler against a real API server with the <b>fake <code>ClusterAdmin</code></b> — no live Valkey, no Kind.</li>
+              <li><b>kind e2e</b> — the three user stories as one ordered run: provision, failover, reshard 3→5, replica scale, scale-in 5→3.</li>
+              <li><b>bench</b> — separate, and not Go: <code>valkey-benchmark</code> driving the live cluster.</li>
             </ul>
+            <div class="say"><span class="k">All Go's std <code>testing</code></span><p>No BDD framework — every test and subtest runs and debugs natively in the IDE, and <code>go test ./...</code> is the whole suite.</p></div>
           </div>
           <div class="card">
-            <h3>Latest e2e run</h3>
-            <pre style="border:none;background:transparent;padding:0;">SUCCESS!
-7 Passed | 0 Failed
-225s</pre>
-            <p style="color:var(--muted);font-size:.9rem;margin:.6rem 0 0;line-height:1.5;">All five day-2 scenarios green against a real Valkey cluster on Kind.</p>
+            <h3>Choices that matter</h3>
+            <ul class="points" style="margin:0;">
+              <li><b>The seam</b> — a <code>ClusterAdmin</code> interface with an in-memory fake makes the reconciler testable without a live Valkey.</li>
+              <li><b>Self-provisioning</b> — envtest boots its own API server; e2e deploys the operator + CR and tears down just the instance.</li>
+              <li><b>Safe by default</b> — e2e refuses any non-Kind context, so it can never run against a real cluster.</li>
+            </ul>
+            <p style="color:var(--muted);font-size:.9rem;margin:.8rem 0 0;line-height:1.5;">~225s on Kind — all five day-2 flows green against a real Valkey cluster.</p>
           </div>
         </div>
       </div>
