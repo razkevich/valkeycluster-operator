@@ -170,23 +170,26 @@
   <span class="cm"># shape</span>
   <span class="nm">shards</span>: 3            <span class="cm"># 1 or &gt;=3 (quorum)</span>
   <span class="nm">replicasPerShard</span>: 2  <span class="cm"># HA copies</span>
+  <span class="cm"># capacity / deployment</span>
+  image: valkey/valkey:8
+  storage:   { size: 8Gi }
+  resources: { limits: { memory: 8Gi } }  <span class="cm"># → maxmemory ~70%</span>
   <span class="cm"># durability ↔ throughput</span>
   persistence: { mode: <span class="st">AOFAndRDB</span>, appendFsync: <span class="st">everysec</span> }
   <span class="cm"># throughput ↔ memory</span>
   performance: { ioThreads: 2, maxmemoryPolicy: <span class="st">noeviction</span> }
   <span class="cm"># availability ↔ consistency</span>
-  haPolicy:
-    minReplicasToWrite: 1
-    requireFullCoverage: true
-    clusterNodeTimeoutMillis: 5000</pre>
+  haPolicy: { minReplicasToWrite: 1, requireFullCoverage: true,
+              clusterNodeTimeoutMillis: 5000 }</pre>
           <div>
             <ul class="points">
               <li><b>Topology</b> — <code>shards</code> &times; <code>replicasPerShard</code>: capacity, write scale-out, HA copies.</li>
-              <li><b>haPolicy</b> — availability ↔ consistency: the write-safety gate, full-coverage, failover speed.</li>
+              <li><b>haPolicy</b> — availability ↔ consistency: write-safety gate, full-coverage, failover speed.</li>
               <li><b>persistence</b> — durability ↔ throughput: AOF / RDB / None, fsync cadence.</li>
               <li><b>performance</b> — throughput ↔ memory: io-threads, eviction policy.</li>
+              <li><b>resources</b> — capacity: <code>limits.memory</code> sets <code>maxmemory</code> (~70%); <code>image</code>/<code>storage</code> are plumbing.</li>
             </ul>
-            <div class="say"><span class="k">What actually matters</span><p>Two numbers are the minimum; the three policy axes are the substance — real Valkey levers with real tradeoffs, each quantified in the benchmark (detailed next).</p></div>
+            <div class="say"><span class="k">What actually matters</span><p>Two numbers are the minimum; the policy axes are the substance — real Valkey levers with real tradeoffs, each quantified in the benchmark (detailed next).</p></div>
           </div>
         </div>
       </div>
