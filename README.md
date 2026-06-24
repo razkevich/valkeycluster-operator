@@ -80,7 +80,7 @@ flowchart LR
   OBS["Observe<br/>CLUSTER INFO / NODES"] --> DEC["Decide<br/>internal/topology"]
   DEC --> ACT{"Action?"}
   ACT -->|not formed| FORM["Form cluster"]
-  ACT -->|shards up| OUT["Scale-out<br/>targeted reshard"]
+  ACT -->|shards up| OUT["Scale-out<br/>native MoveSlots"]
   ACT -->|shards down| IN["Scale-in<br/>native MoveSlots + teardown"]
   ACT -->|open slots| REP["RepairSlots"]
   ACT -->|replicas changed| RPL["Adjust replicas"]
@@ -98,8 +98,9 @@ flowchart LR
   lives on the PVC so a restarted node keeps its identity.
 - The reconciler observes the live cluster (`CLUSTER INFO`/`NODES` via go-redis), decides the next
   action (`internal/topology`), and acts:
-  - **scale-out** — join the new shard's primary and move it its fair share of slots with a
-    *targeted* reshard (never `--use-empty-masters`, which would hand slots to replica pods);
+  - **scale-out** — join the new shard's primary, attach its replicas, then move it its fair share
+    of slots with the **native Go slot-mover** — targeted at that specific new primary, never at
+    empty masters (which would hand slots to replica pods);
   - **scale-in** — drain a departing shard's slots onto a survivor with a **native Go slot-mover**
     (`SETSLOT` + `MIGRATE ... REPLACE` by IP, masters-only `SETSLOT NODE`), then forget its nodes
     cluster-wide and delete its StatefulSet. Teardown is driven by which StatefulSets still exist,
