@@ -132,7 +132,6 @@
       </div>
     </section>
 
-    <!-- 02 AGENDA / BRIEF -->
     <section class="slide" data-eyebrow="The brief, and how it's covered">
       <div class="wrap">
         <h2>One operator, every box checked</h2>
@@ -161,7 +160,6 @@
       </div>
     </section>
 
-    <!-- 03 WHAT YOU DECLARE -->
     <section class="slide" data-eyebrow="The API · topology + the tradeoffs">
       <div class="wrap">
         <h2>Topology sets the shape. The <span class="q">policy</span> sets the tradeoffs.</h2>
@@ -195,88 +193,6 @@
       </div>
     </section>
 
-    <!-- 04 ARCHITECTURE -->
-    <section class="slide" data-eyebrow="Architecture">
-      <div class="wrap">
-        <h2>One StatefulSet per shard</h2>
-        <div class="grid cols-2">
-          <div>
-            <ul class="points">
-              <li><b>One CRD</b> — the whole API fits on a screen.</li>
-              <li><b>StatefulSet per shard</b>: adding a shard = adding a StatefulSet; resharding has a clean unit.</li>
-              <li>Headless Service for stable per-pod DNS; <b>announce-hostname</b> + <code>nodes.conf</code> on the PVC so identity survives restarts.</li>
-              <li>Anti-affinity: a replica never shares a node with its primary.</li>
-            </ul>
-          </div>
-          <pre>ValkeyCluster CR
-      │ desired state
-      ▼
-   operator ──owns──▶ ConfigMap (valkey.conf)
-      │      ──owns──▶ Headless Service
-      │      ──owns──▶ StatefulSet/shard ─▶ pods
-      └╌╌ CLUSTER RPCs (go-redis)
-          + valkey-cli (pod-exec)</pre>
-        </div>
-        <div class="say"><span class="k">Why it matters</span><p>A shard maps to exactly one workload — that single decision makes every day-2 operation legible.</p></div>
-      </div>
-    </section>
-
-    <!-- 05 RECONCILE LOOP -->
-    <section class="slide" data-eyebrow="The reconcile loop">
-      <div class="wrap">
-        <h2>Observe → Decide → Act</h2>
-        <div class="grid cols-2" style="align-items:start;">
-          <div>
-            <ul class="points">
-              <li><b>Level-triggered</b>: handed the object, reads full state, converges. No events to miss.</li>
-              <li><b>Idempotent</b>: every step reads actual state first; safe to run a hundred times.</li>
-              <li>The decision is a <b>pure function</b> — no I/O, 100% unit-tested.</li>
-            </ul>
-          </div>
-          <pre><span class="kw">func</span> Decide(desired, observed) Plan {
-  <span class="kw">if</span> !Formed        <span class="cm">→ Form</span>
-  <span class="kw">if</span> !SlotsCovered  <span class="cm">→ Repair  // gate</span>
-  <span class="kw">if</span> want &gt; have    <span class="cm">→ ScaleOut</span>
-  <span class="kw">if</span> want &lt; have    <span class="cm">→ ScaleIn</span>
-  <span class="kw">if</span> replicasDiffer <span class="cm">→ ScaleReplicas</span>
-  <span class="kw">else</span>              <span class="cm">→ None</span>
-}</pre>
-        </div>
-        <div class="say"><span class="k">The testability seam</span><p>A <code>ClusterAdmin</code> interface carries actions out — go-redis + pod-exec in prod, an in-memory fake in tests — so the reconciler runs in envtest with no live Valkey.</p></div>
-      </div>
-    </section>
-
-    <!-- 06 DESIGN DECISIONS -->
-    <section class="slide" data-eyebrow="Design decisions">
-      <div class="wrap">
-        <h2>The choices that matter</h2>
-        <ul class="points">
-          <li><b>One CRD, two numbers</b> — no definition/instance/ops split to learn.</li>
-          <li><b>Pure <code>Decide</code> function</b> — the hard question (what next) is I/O-free and testable; the mess (talking to a cluster) hides behind an interface.</li>
-          <li><b>Reuse Valkey's failover</b> — quorum promotion already works; reimplementing it adds risk for nothing.</li>
-          <li><b>Native Go slot-mover for migration</b> — deterministic where <code>valkey-cli reshard</code> refuses on uneven states.</li>
-          <li><b>Scope discipline</b> — sharding/replication/resharding done right; documented non-goals stay out (YAGNI).</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- 07 VS KUBEBLOCKS -->
-    <section class="slide" data-eyebrow="Differences vs KubeBlocks">
-      <div class="wrap">
-        <h2>vs <span class="q">KubeBlocks</span></h2>
-        <table>
-          <tr><th></th><th>This operator</th><th>KubeBlocks</th></tr>
-          <tr><td><b>Goal</b></td><td>One engine, Valkey</td><td>Platform for many engines</td></tr>
-          <tr><td><b>API</b></td><td>1 CRD</td><td>definition + instance + ops CRDs</td></tr>
-          <tr><td><b>Reconcile</b></td><td>pure <code>Decide</code>, one action</td><td>transformer DAG (engine-agnostic)</td></tr>
-          <tr><td><b>Day-2</b></td><td>provision, failover, reshard, scale</td><td>+ backup, upgrade, vertical scale</td></tr>
-          <tr><td><b>Extend</b></td><td>change code</td><td>declarative addon</td></tr>
-        </table>
-        <div class="say"><span class="k">In one sentence</span><p>KubeBlocks is right if you run many databases. For one engine, a purpose-built operator you can read and test end-to-end in an afternoon — borrowing KubeBlocks' hard-won operational defaults: announce-hostname, <code>nodes.conf</code> on the PVC, drain-before-remove.</p></div>
-      </div>
-    </section>
-
-    <!-- 08 VALKEY MODEL -->
     <section class="slide" data-eyebrow="Redis/Valkey cluster model · the foundation">
       <div class="wrap">
         <h2>Slots, quorum, and an honest data-loss window</h2>
@@ -284,12 +200,12 @@
           <li><b>16384 hash slots</b>; <code>slot = CRC16(key) mod 16384</code>. Each primary owns a range; together they cover all of them.</li>
           <li>Failover is a <b>vote among primaries</b> → you need <b>≥3</b> (with 2 there's no majority). The CRD rejects <code>shards: 2</code>.</li>
           <li>Replication is <b>always asynchronous</b> — no synchronous mode. An acked write can be lost if a primary dies before its replica sees it.</li>
+          <li><b>One role per node</b> — a node is a master (owns slots) <em>or</em> a replica of a single master. Unlike MongoDB, it can't be primary for some slots and replica for others.</li>
         </ul>
         <div class="say warm"><span class="k">No synchronous replication</span><p>There is no sync mode in Redis/Valkey. <code>min-replicas-to-write</code> is a safety <em>gate</em>, not sync; <code>WAIT</code> is the per-write primitive. The data-loss window shrinks — it doesn't vanish.</p></div>
       </div>
     </section>
 
-    <!-- 09 SETTINGS PERF + HA -->
     <section class="slide" data-eyebrow="Settings for performance &amp; high availability">
       <div class="wrap">
         <h2>The levers, and their tradeoffs</h2>
@@ -306,7 +222,6 @@
       </div>
     </section>
 
-    <!-- 10 HA DEFAULTS -->
     <section class="slide" data-eyebrow="HA depth · what's left at defaults">
       <div class="wrap">
         <h2>What I'd reach for next (and know cold)</h2>
@@ -319,7 +234,6 @@
       </div>
     </section>
 
-    <!-- 11 NO-PERSISTENCE CACHE -->
     <section class="slide" data-eyebrow="Follow-up · cache that must stay up, data loss OK">
       <div class="wrap">
         <h2>Drop durability, buy availability, spend on speed</h2>
@@ -346,7 +260,98 @@
       </div>
     </section>
 
-    <!-- 12 RECONCILE EDGE CASES -->
+    <section class="slide" data-eyebrow="Architecture">
+      <div class="wrap">
+        <h2>One StatefulSet per shard</h2>
+        <div class="grid cols-2">
+          <div>
+            <ul class="points">
+              <li><b>One CRD</b> — the whole API fits on a screen.</li>
+              <li><b>StatefulSet per shard</b>: adding a shard = adding a StatefulSet; resharding has a clean unit.</li>
+              <li>Headless Service for stable per-pod DNS; <b>announce-hostname</b> + <code>nodes.conf</code> on the PVC so identity survives restarts.</li>
+              <li>Anti-affinity: a replica never shares a node with its primary.</li>
+            </ul>
+          </div>
+          <pre>ValkeyCluster CR
+      │ desired state
+      ▼
+   operator ──owns──▶ ConfigMap (valkey.conf)
+      │      ──owns──▶ Headless Service
+      │      ──owns──▶ StatefulSet/shard ─▶ pods
+      └╌╌ CLUSTER RPCs (go-redis)
+          + valkey-cli (pod-exec)</pre>
+        </div>
+        <div class="say"><span class="k">Why it matters</span><p>A shard maps to exactly one workload — that single decision makes every day-2 operation legible.</p></div>
+      </div>
+    </section>
+
+    <section class="slide" data-eyebrow="Valkey Cluster, mapped to Kubernetes">
+      <div class="wrap">
+        <h2>What a cluster node needs — and what provides it</h2>
+        <table>
+          <tr><th>A Valkey node needs…</th><th>Kubernetes primitive</th><th>Why</th></tr>
+          <tr><td>Stable identity</td><td><b>StatefulSet</b> per shard + <b>PVC</b></td><td>ordinal pod names; <code>nodes.conf</code> on the PVC survives restart, so a node rejoins as itself</td></tr>
+          <tr><td>Stable network name</td><td><b>Headless Service</b></td><td>per-pod DNS (<code>shard-0-0.&lt;svc&gt;</code>); client port 6379, cluster-bus 16379</td></tr>
+          <tr><td>To survive IP changes</td><td><code>cluster-announce-hostname</code></td><td>gossip &amp; <code>MOVED</code>/<code>ASK</code> use the stable FQDN, not the ephemeral pod IP</td></tr>
+          <tr><td>Config</td><td><b>ConfigMap</b> (valkey.conf)</td><td>rendered from the CR; a config-hash on the pod template rolls pods when it changes</td></tr>
+          <tr><td>HA placement</td><td>pod <b>anti-affinity</b></td><td>a replica never lands on the same node as its primary</td></tr>
+        </table>
+        <div class="say"><span class="k">The shape</span><p>Each shard = one StatefulSet of <code>1 + replicasPerShard</code> pods (ordinals 0…N). One headless Service and one ConfigMap are shared across all shards of a cluster; everything is owner-referenced so deleting the CR garbage-collects it.</p></div>
+      </div>
+    </section>
+
+    <section class="slide" data-eyebrow="The reconcile loop">
+      <div class="wrap">
+        <h2>Observe → Decide → Act</h2>
+        <div class="grid cols-2" style="align-items:start;">
+          <div>
+            <ul class="points">
+              <li><b>Level-triggered</b>: handed the object, reads full state, converges. No events to miss.</li>
+              <li><b>Idempotent</b>: every step reads actual state first; safe to run a hundred times.</li>
+              <li>The decision is a <b>pure function</b> — no I/O, 100% unit-tested.</li>
+            </ul>
+          </div>
+          <pre><span class="kw">func</span> Decide(desired, observed) Plan {
+  <span class="kw">if</span> !Formed        <span class="cm">→ Form</span>
+  <span class="kw">if</span> !SlotsCovered  <span class="cm">→ Repair  // gate</span>
+  <span class="kw">if</span> want &gt; have    <span class="cm">→ ScaleOut</span>
+  <span class="kw">if</span> want &lt; have    <span class="cm">→ ScaleIn</span>
+  <span class="kw">if</span> replicasDiffer <span class="cm">→ ScaleReplicas</span>
+  <span class="kw">else</span>              <span class="cm">→ None</span>
+}</pre>
+        </div>
+        <div class="say"><span class="k">The testability seam</span><p>A <code>ClusterAdmin</code> interface carries actions out — go-redis + pod-exec in prod, an in-memory fake in tests — so the reconciler runs in envtest with no live Valkey.</p></div>
+      </div>
+    </section>
+
+    <section class="slide" data-eyebrow="Design decisions">
+      <div class="wrap">
+        <h2>The choices that matter</h2>
+        <ul class="points">
+          <li><b>One CRD, two numbers</b> — no definition/instance/ops split to learn.</li>
+          <li><b>Pure <code>Decide</code> function</b> — the hard question (what next) is I/O-free and testable; the mess (talking to a cluster) hides behind an interface.</li>
+          <li><b>Reuse Valkey's failover</b> — quorum promotion already works; reimplementing it adds risk for nothing.</li>
+          <li><b>Native Go slot-mover for migration</b> — deterministic where <code>valkey-cli reshard</code> refuses on uneven states.</li>
+          <li><b>Scope discipline</b> — sharding/replication/resharding done right; documented non-goals stay out (YAGNI).</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide" data-eyebrow="Differences vs KubeBlocks">
+      <div class="wrap">
+        <h2>vs <span class="q">KubeBlocks</span></h2>
+        <table>
+          <tr><th></th><th>This operator</th><th>KubeBlocks</th></tr>
+          <tr><td><b>Goal</b></td><td>One engine, Valkey</td><td>Platform for many engines</td></tr>
+          <tr><td><b>API</b></td><td>1 CRD</td><td>definition + instance + ops CRDs</td></tr>
+          <tr><td><b>Reconcile</b></td><td>pure <code>Decide</code>, one action</td><td>transformer DAG (engine-agnostic)</td></tr>
+          <tr><td><b>Day-2</b></td><td>provision, failover, reshard, scale</td><td>+ backup, upgrade, vertical scale</td></tr>
+          <tr><td><b>Extend</b></td><td>change code</td><td>declarative addon</td></tr>
+        </table>
+        <div class="say"><span class="k">In one sentence</span><p>KubeBlocks is right if you run many databases. For one engine, a purpose-built operator you can read and test end-to-end in an afternoon — borrowing KubeBlocks' hard-won operational defaults: announce-hostname, <code>nodes.conf</code> on the PVC, drain-before-remove.</p></div>
+      </div>
+    </section>
+
     <section class="slide" data-eyebrow="Follow-up · edge cases in the reconcile loop">
       <div class="wrap">
         <h2>Why it stays correct under failure</h2>
@@ -374,7 +379,6 @@
       </div>
     </section>
 
-    <!-- 13 GOTCHAS -->
     <section class="slide" data-eyebrow="The Valkey-on-Kubernetes details that matter">
       <div class="wrap">
         <h2>The things you only learn by running it</h2>
@@ -388,7 +392,42 @@
       </div>
     </section>
 
-    <!-- 14 DAY-2 -->
+    <section class="slide" data-eyebrow="Resharding · the marquee day-2 op">
+      <div class="wrap">
+        <h2>Resharding moves <span class="q">slots</span>, not keys</h2>
+        <div class="grid cols-2" style="align-items:start;">
+          <div>
+            <ul class="points">
+              <li>A key's slot is <b>fixed</b>: <code>slot = CRC16(key) mod 16384</code>, and routing is purely by slot → owner.</li>
+              <li>So you <b>can't relocate data by moving keys</b> — clients would still route to the slot's owner. You transfer the <b>slot</b>; its keys come along.</li>
+              <li>Resharding = rewriting <b>slot → primary</b> ownership to rebalance when shards are added or removed.</li>
+              <li>Data-preserving; a key requested mid-move gets an <code>ASK</code> redirect to the target.</li>
+            </ul>
+          </div>
+          <pre><span class="cm"># per slot s, idempotently:</span>
+SETSLOT s IMPORTING  <span class="cm">→ target</span>
+SETSLOT s MIGRATING  <span class="cm">→ source</span>
+MIGRATE keys  source → target   <span class="cm"># empty: skip</span>
+SETSLOT s NODE target  <span class="cm"># on every master</span></pre>
+        </div>
+        <div class="say"><span class="k">Move slots, not keys</span><p>You're rewriting the routing map; the keys move as a side effect. Done natively in Go for determinism — <code>valkey-cli reshard</code> refuses on uneven/interrupted states — in bounded batches that resume after a crash.</p></div>
+      </div>
+    </section>
+
+    <section class="slide" data-eyebrow="Robustness · found by stress-testing, fixed at root cause">
+      <div class="wrap">
+        <h2>Made robust the hard way</h2>
+        <table>
+          <tr><th>Edge case found</th><th>Fix</th></tr>
+          <tr><td>Config edits (ioThreads…) silently inert</td><td><span class="ok">config-hash → rolling restart</span></td></tr>
+          <tr><td>Dead/<code>fail</code> nodes stall observation</td><td><span class="ok">skip them + bounded dial timeout</span></td></tr>
+          <tr><td>Scale-out wedges on uneven distribution</td><td><span class="ok">native MoveSlots (not valkey-cli)</span></td></tr>
+          <tr><td>Scale-out <code>NOREPLICAS</code> at min-replicas≥1</td><td><span class="ok">attach replicas before moving slots</span></td></tr>
+        </table>
+        <div class="say"><span class="k">How they were found</span><p>Each surfaced by deliberately stressing the operator — multiple clusters, mid-reshard topology flips — then fixed at the root cause and pinned with a regression test. Changing the desired topology mid-reshard now converges with zero data loss.</p></div>
+      </div>
+    </section>
+
     <section class="slide" data-eyebrow="Day-2 operations · the runbook as software">
       <div class="wrap">
         <h2>Every day-2 op, encoded</h2>
@@ -404,22 +443,6 @@
       </div>
     </section>
 
-    <!-- 15 ROBUSTNESS / BUGS -->
-    <section class="slide" data-eyebrow="Robustness · found by stress-testing, fixed at root cause">
-      <div class="wrap">
-        <h2>Made robust the hard way</h2>
-        <table>
-          <tr><th>Edge case found</th><th>Fix</th></tr>
-          <tr><td>Config edits (ioThreads…) silently inert</td><td><span class="ok">config-hash → rolling restart</span></td></tr>
-          <tr><td>Dead/<code>fail</code> nodes stall observation</td><td><span class="ok">skip them + bounded dial timeout</span></td></tr>
-          <tr><td>Scale-out wedges on uneven distribution</td><td><span class="ok">native MoveSlots (not valkey-cli)</span></td></tr>
-          <tr><td>Scale-out <code>NOREPLICAS</code> at min-replicas≥1</td><td><span class="ok">attach replicas before moving slots</span></td></tr>
-        </table>
-        <div class="say"><span class="k">How they were found</span><p>Each surfaced by deliberately stressing the operator — multiple clusters, mid-reshard topology flips — then fixed at the root cause and pinned with a regression test. Changing the desired topology mid-reshard now converges with zero data loss.</p></div>
-      </div>
-    </section>
-
-    <!-- 16 TESTING -->
     <section class="slide" data-eyebrow="Tests &amp; bench · verifying day-2">
       <div class="wrap">
         <h2>Three layers, weighted to day-2</h2>
@@ -443,7 +466,6 @@
       </div>
     </section>
 
-    <!-- 17 AI METHODOLOGY -->
     <section class="slide" data-eyebrow="AI development methodology">
       <div class="wrap">
         <h2>Spec-driven, verified on a real cluster</h2>
@@ -457,7 +479,6 @@
       </div>
     </section>
 
-    <!-- 18 SCOPE + LINKS -->
     <section class="slide" data-eyebrow="Scope &amp; where everything lives">
       <div class="wrap">
         <h2>Deliberately bounded</h2>
@@ -472,7 +493,6 @@
       </div>
     </section>
 
-    <!-- 19 CLOSE -->
     <section class="slide" data-eyebrow="In one breath">
       <div class="wrap">
         <h2>The 60-second version</h2>
