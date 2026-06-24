@@ -157,7 +157,7 @@
             </ul>
           </div>
         </div>
-        <div class="say"><span class="k">Frame it</span><p>"Small scope, done correctly and understood deeply — and I'll show you exactly where each requirement lives in the code and docs."</p></div>
+        <div class="say"><span class="k">The approach</span><p>Small scope, done correctly and understood deeply — every requirement traceable to code and docs.</p></div>
       </div>
     </section>
 
@@ -213,7 +213,7 @@ try   3       2         Ready  3</pre>
       └╌╌ CLUSTER RPCs (go-redis)
           + valkey-cli (pod-exec)</pre>
         </div>
-        <div class="say"><span class="k">Say this</span><p>"A shard maps to exactly one workload. That single decision makes every day-2 operation legible."</p></div>
+        <div class="say"><span class="k">Why it matters</span><p>A shard maps to exactly one workload — that single decision makes every day-2 operation legible.</p></div>
       </div>
     </section>
 
@@ -238,7 +238,7 @@ try   3       2         Ready  3</pre>
   <span class="kw">else</span>              <span class="cm">→ None</span>
 }</pre>
         </div>
-        <div class="say"><span class="k">The seam</span><p>"A <code>ClusterAdmin</code> interface carries actions out — a go-redis + pod-exec impl in prod, an in-memory fake in tests. That's why the reconciler runs in envtest with no live Valkey."</p></div>
+        <div class="say"><span class="k">The testability seam</span><p>A <code>ClusterAdmin</code> interface carries actions out — go-redis + pod-exec in prod, an in-memory fake in tests — so the reconciler runs in envtest with no live Valkey.</p></div>
       </div>
     </section>
 
@@ -268,7 +268,7 @@ try   3       2         Ready  3</pre>
           <tr><td><b>Day-2</b></td><td>provision, failover, reshard, scale</td><td>+ backup, upgrade, vertical scale</td></tr>
           <tr><td><b>Extend</b></td><td>change code</td><td>declarative addon</td></tr>
         </table>
-        <div class="say"><span class="k">The one-liner</span><p>"KubeBlocks is right if you run many databases. For one engine I wanted something I could read and test end-to-end in an afternoon — so I built the clustering core directly and borrowed KubeBlocks' hard-won operational defaults: announce-hostname, <code>nodes.conf</code> on the PVC, drain-before-remove."</p></div>
+        <div class="say"><span class="k">In one sentence</span><p>KubeBlocks is right if you run many databases. For one engine, a purpose-built operator you can read and test end-to-end in an afternoon — borrowing KubeBlocks' hard-won operational defaults: announce-hostname, <code>nodes.conf</code> on the PVC, drain-before-remove.</p></div>
       </div>
     </section>
 
@@ -281,7 +281,7 @@ try   3       2         Ready  3</pre>
           <li>Failover is a <b>vote among primaries</b> → you need <b>≥3</b> (with 2 there's no majority). The CRD rejects <code>shards: 2</code>.</li>
           <li>Replication is <b>always asynchronous</b> — no synchronous mode. An acked write can be lost if a primary dies before its replica sees it.</li>
         </ul>
-        <div class="say warm"><span class="k">The honesty that scores points</span><p>"There is no synchronous replication in Redis/Valkey. <code>min-replicas-to-write</code> is a safety <em>gate</em>, not sync; <code>WAIT</code> is the per-write primitive. I shrink the data-loss window — I don't pretend to eliminate it."</p></div>
+        <div class="say warm"><span class="k">No synchronous replication</span><p>There is no sync mode in Redis/Valkey. <code>min-replicas-to-write</code> is a safety <em>gate</em>, not sync; <code>WAIT</code> is the per-write primitive. The data-loss window shrinks — it doesn't vanish.</p></div>
       </div>
     </section>
 
@@ -311,7 +311,7 @@ try   3       2         Ready  3</pre>
           <li><code>cluster-replica-validity-factor</code> — may a <b>stale</b> replica promote? availability vs data-recency.</li>
           <li><code>cluster-migration-barrier</code> / allow-replica-migration — auto-cover an orphaned primary.</li>
         </ul>
-        <div class="say"><span class="k">Volunteer this</span><p>"I exposed the headline failover/durability levers; these second-order ones run at Valkey defaults — a deliberate scope call, and the first two are the ones I'd promote to CRD fields to make the HA story airtight."</p></div>
+        <div class="say"><span class="k">Deliberate scope</span><p>The headline failover/durability levers are exposed; these second-order ones run at Valkey defaults — and the first two are the candidates to promote to CRD fields to make the HA story airtight.</p></div>
       </div>
     </section>
 
@@ -380,7 +380,7 @@ try   3       2         Ready  3</pre>
           <li><b><code>SETSLOT</code> is rejected on replicas</b> — assert ownership on masters only.</li>
           <li><b>Primary ≠ pod ordinal 0</b> after a failover — discover it via <code>CLUSTER MYID</code> + slot ownership.</li>
         </ul>
-        <div class="say"><span class="k">This is the signal</span><p>"These are where running a clustering operator differs from reading about one — and where the unit tests were green but the cluster wasn't."</p></div>
+        <div class="say"><span class="k">Why it matters</span><p>This is where running a clustering operator differs from reading about one — and where the unit tests were green but the cluster wasn't.</p></div>
       </div>
     </section>
 
@@ -411,7 +411,7 @@ try   3       2         Ready  3</pre>
           <tr><td>Scale-out wedges on uneven distribution</td><td><span class="ok">native MoveSlots (not valkey-cli)</span></td></tr>
           <tr><td>Scale-out <code>NOREPLICAS</code> at min-replicas≥1</td><td><span class="ok">attach replicas before moving slots</span></td></tr>
         </table>
-        <div class="say"><span class="k">The methodology, demonstrated</span><p>"Each was found by deliberately stressing the operator — multiple clusters, mid-reshard topology flips — fixed at the root cause, and pinned with a regression test. Changing the desired topology mid-reshard now converges with zero data loss."</p></div>
+        <div class="say"><span class="k">How they were found</span><p>Each surfaced by deliberately stressing the operator — multiple clusters, mid-reshard topology flips — then fixed at the root cause and pinned with a regression test. Changing the desired topology mid-reshard now converges with zero data loss.</p></div>
       </div>
     </section>
 
@@ -449,7 +449,7 @@ try   3       2         Ready  3</pre>
           <li>A <b>testable seam by design</b> (ClusterAdmin + fake) so most changes verify in seconds.</li>
           <li>Real <b>kind cluster as a first-class gate</b>: defects get fixed at root cause and locked with a regression test.</li>
         </ul>
-        <div class="say"><span class="k">Say this</span><p>"AI gave leverage on scaffolding and boilerplate; human judgment owned the correctness-critical parts — the consistency tradeoffs, migrate-before-remove ordering, and the gotchas that only surfaced live."</p></div>
+        <div class="say"><span class="k">The division of labor</span><p>AI gave leverage on scaffolding and boilerplate; human judgment owned the correctness-critical parts — the consistency tradeoffs, migrate-before-remove ordering, and the gotchas that only surfaced live.</p></div>
       </div>
     </section>
 
@@ -464,7 +464,7 @@ try   3       2         Ready  3</pre>
           <span class="pill">spec-kit · specs/</span>
           <span class="pill">bench · bench/</span>
         </div>
-        <div class="say"><span class="k">Defend the scope</span><p>"A smaller surface done correctly and understood deeply beats an ambitious half-built operator — and it's the honest answer to the brief."</p></div>
+        <div class="say"><span class="k">The principle</span><p>A smaller surface done correctly and understood deeply beats an ambitious half-built operator — and it's the honest answer to the brief.</p></div>
       </div>
     </section>
 
@@ -473,9 +473,9 @@ try   3       2         Ready  3</pre>
       <div class="wrap">
         <h2>The 60-second version</h2>
         <p class="lead" style="max-width:62ch;font-size:clamp(1.1rem,1.9vw,1.4rem);color:#E8EBF2;">
-          "It's a Kubernetes operator for Valkey Cluster. You declare shards and replicas-per-shard; it reconciles a real, sharded, HA cluster — one StatefulSet per shard, hostname identity that survives restarts, data-preserving resharding when you change the topology. A pure <span style="color:var(--accent)">Decide</span> function picks one action; a <span style="color:var(--accent-2)">ClusterAdmin</span> interface carries it out. The interesting tradeoffs are exposed as knobs and quantified in a benchmark. Built spec-first, cross-checked against KubeBlocks, and hardened by stressing it until it broke — then fixing the root cause."
+          A Kubernetes operator for Valkey Cluster. You declare shards and replicas-per-shard; it reconciles a real, sharded, HA cluster — one StatefulSet per shard, hostname identity that survives restarts, data-preserving resharding when you change the topology. A pure <span style="color:var(--accent)">Decide</span> function picks one action; a <span style="color:var(--accent-2)">ClusterAdmin</span> interface carries it out. The interesting tradeoffs are exposed as knobs and quantified in a benchmark. Built spec-first, cross-checked against KubeBlocks, and hardened by stressing it until it broke — then fixing the root cause.
         </p>
-        <div class="say"><span class="k">Then open the floor</span><p>Likely questions: synchronous replication? · what if the operator dies mid-reshard? · why not KubeBlocks? · what's missing? — all answered in the preceding slides.</p></div>
+        <div class="say"><span class="k">Likely questions</span><p>Synchronous replication? · what if the operator dies mid-reshard? · why not KubeBlocks? · what's missing? — each addressed in the preceding slides.</p></div>
       </div>
     </section>
 
