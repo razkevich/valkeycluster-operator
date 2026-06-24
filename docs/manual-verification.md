@@ -33,17 +33,41 @@ directly. Reproduce with [quickstart.md](https://github.com/razkevich/valkeyclus
 
 ## Notes
 - Two Valkey-on-Kubernetes details the operator handles: `CLUSTER MEET` requires an IP (it resolves
-  FQDN → IP while nodes still announce their hostname), and scale-out uses a **targeted** reshard to
-  the new primary, never to empty masters, so replica pods don't become
+  FQDN → IP while nodes still announce their hostname), and scale-out moves slots with a native
+  slot-mover targeted at the new primary, never at empty masters, so replica pods don't become
   spurious primaries.
-- These flows are also covered by an **automated Ginkgo e2e suite** in
-  `test/e2e/valkeycluster_test.go` (provision+use, failover, reshard 3→5, scale-in 5→3, replica
-  scaling), which passes against a real Valkey cluster on Kind. Run it with `make test-e2e`
-  (spins its own kind cluster; set `CERT_MANAGER_INSTALL_SKIP=true` — the operator has no webhooks).
-  The reconcile decision logic is additionally covered by envtest with a fake cluster.
+- These flows are also covered by an **automated e2e suite** (Go's std `testing`) in
+  `test/e2e/valkeycluster_test.go` — a single ordered `TestLifecycle` with subtests for
+  provision+use, failover, reshard 3→5, replica scaling, and scale-in 5→3, run against a real
+  Valkey cluster on Kind. Run it with `make test-e2e` (creates the kind cluster if absent; the
+  test installs/undeploys the operator and creates/deletes the CR itself). The reconcile decision
+  logic is additionally covered by **envtest** (`internal/controller`, also std `testing` with a
+  fake cluster) — no real cluster needed, just `make setup-envtest` once.
 
-  Latest full run: `SUCCESS! 7 Passed | 0 Failed` in ~225s (provision 52s, failover 17s, reshard
-  3→5 52s, replica scaling 31s, scale-in 5→3 35s, plus the manager/metrics smoke specs).
+  Latest measured lifecycle wall-clock ~225s: provision 52s, failover 17s, reshard 3→5 52s, replica
+  scaling 31s, scale-in 5→3 35s (these are operator-behavior timings, unchanged by the test harness).
 - For a quick, human-readable smoke test against an **already-running** cluster, `bench/day2-matrix.sh`
   drives provision → scale-out 5 → scale-in 3 and reports read/write hit counts at every pivot
   (including live writes mid-reshard).
+
+## Running & debugging the tests
+
+All tests use Go's standard `testing` package (no Ginkgo/Gomega/testify), so every test and
+`t.Run` subtest gets a native run/debug gutter icon in IntelliJ/GoLand and runs from the CLI.
+
+| Layer | Command | Prerequisite |
+|---|---|---|
+| Unit | `go test ./internal/...` | none |
+| Controller (envtest) | `make test` | `make setup-envtest` once (fetches the apiserver binaries; no cluster) |
+| e2e (Kind) | `make test-e2e` | Kind installed (the target creates the cluster if absent) |
+
+- **Target one case:** `go test ./internal/controller/ -run TestReconcile_ProvisionAndForm` — or a
+  single subtest with `-run 'TestReconcile_ProvisionAndForm/phase_is_Provisioning'` (spaces become `_`).
+- **Watch the cluster while e2e runs:** `make test-e2e KEEP_CLUSTER=true` leaves the Kind cluster and
+  the deployed ValkeyCluster up after the run; tail it in another pane with `kubectl get valkeycluster -w`
+  or k9s. Without it, the suite tears down the operator, the CR, and the Kind cluster.
+- **e2e from the IDE:** the e2e files carry a `//go:build e2e` constraint (so a plain `go test ./...`
+  never tries to spin up Kind). GoLand ignores tagged files until you enable the tag:
+  Settings → Go → Build Tags & Vendoring → **Custom tags: `e2e`**. After that the file lights up and
+  its gutter run/debug icons work. Running e2e directly (not via `make`) needs a Kind cluster already
+  up with `kubectl` pointed at it.

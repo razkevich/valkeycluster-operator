@@ -18,13 +18,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -37,76 +34,71 @@ import (
 	// +kubebuilder:scaffold:imports
 )
 
-// These tests use Ginkgo (BDD-style Go testing framework). Refer to
-// http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
-
+// Controller tests run against envtest (a real API server + etcd, no kubelet) with a
+// fake ClusterAdmin, so the reconcile logic is exercised without a live Valkey. The
+// API server is started once for the package in TestMain and shared by every Test.
 var (
-	ctx       context.Context
-	cancel    context.CancelFunc
 	testEnv   *envtest.Environment
 	cfg       *rest.Config
 	k8sClient client.Client
 )
 
-func TestControllers(t *testing.T) {
-	RegisterFailHandler(Fail)
+// TestMain bootstraps the envtest API server once for the whole package, runs the
+// tests, then tears it down. Running this from an IDE only needs `make setup-envtest`
+// first (it locates the binaries the same way KUBEBUILDER_ASSETS would).
+func TestMain(m *testing.M) {
+	logf.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	RunSpecs(t, "Controller Suite")
-}
-
-var _ = BeforeSuite(func() {
-	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
-
-	ctx, cancel = context.WithCancel(context.TODO())
-
-	var err error
-	err = cachev1alpha1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
+	if err := cachev1alpha1.AddToScheme(scheme.Scheme); err != nil {
+		fmt.Fprintf(os.Stderr, "add scheme: %v\n", err)
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:scheme
 
-	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
 	}
-
-	// Retrieve the first found binary directory to allow running tests from IDEs
-	if getFirstFoundEnvTestBinaryDir() != "" {
-		testEnv.BinaryAssetsDirectory = getFirstFoundEnvTestBinaryDir()
+	if dir := firstFoundEnvTestBinaryDir(); dir != "" {
+		testEnv.BinaryAssetsDirectory = dir
 	}
 
-	// cfg is defined in this file globally.
+	var err error
 	cfg, err = testEnv.Start()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(cfg).NotTo(BeNil())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "start envtest: %v (run `make setup-envtest`)\n", err)
+		os.Exit(1)
+	}
 
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
-	Expect(err).NotTo(HaveOccurred())
-	Expect(k8sClient).NotTo(BeNil())
-})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build client: %v\n", err)
+		_ = testEnv.Stop()
+		os.Exit(1)
+	}
 
-var _ = AfterSuite(func() {
-	By("tearing down the test environment")
-	cancel()
-	Eventually(func() error {
-		return testEnv.Stop()
-	}, time.Minute, time.Second).Should(Succeed())
-})
+	code := m.Run()
 
-// getFirstFoundEnvTestBinaryDir locates the first binary in the specified path.
-// ENVTEST-based tests depend on specific binaries, usually located in paths set by
-// controller-runtime. When running tests directly (e.g., via an IDE) without using
-// Makefile targets, the 'BinaryAssetsDirectory' must be explicitly configured.
-//
-// This function streamlines the process by finding the required binaries, similar to
-// setting the 'KUBEBUILDER_ASSETS' environment variable. To ensure the binaries are
-// properly set up, run 'make setup-envtest' beforehand.
-func getFirstFoundEnvTestBinaryDir() string {
+	if err := testEnv.Stop(); err != nil {
+		fmt.Fprintf(os.Stderr, "stop envtest: %v\n", err)
+	}
+	os.Exit(code)
+}
+
+// testCtx is a per-test context tied to the test's lifetime.
+func testCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// firstFoundEnvTestBinaryDir locates the envtest binaries under bin/k8s so the suite
+// runs from an IDE without KUBEBUILDER_ASSETS set. Run `make setup-envtest` first.
+func firstFoundEnvTestBinaryDir() string {
 	basePath := filepath.Join("..", "..", "bin", "k8s")
 	entries, err := os.ReadDir(basePath)
 	if err != nil {
-		logf.Log.Error(err, "Failed to read directory", "path", basePath)
 		return ""
 	}
 	for _, entry := range entries {

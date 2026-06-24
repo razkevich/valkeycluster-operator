@@ -18,10 +18,9 @@ package controller
 
 import (
 	"context"
-	"fmt"
+	"strings"
+	"testing"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -34,117 +33,178 @@ import (
 	"github.com/razkevich/valkeycluster-operator/internal/resources"
 )
 
-var _ = Describe("ValkeyCluster Controller", func() {
-	const ns = "default"
-	ctx := context.Background()
+const testNS = "default"
 
-	newReconciler := func() *ValkeyClusterReconciler {
-		return &ValkeyClusterReconciler{
-			Client: k8sClient,
-			Scheme: k8sClient.Scheme(),
-			Admin:  cluster.NewFake(),
+func newReconciler() *ValkeyClusterReconciler {
+	return &ValkeyClusterReconciler{
+		Client: k8sClient,
+		Scheme: k8sClient.Scheme(),
+		Admin:  cluster.NewFake(),
+	}
+}
+
+func makeCR(name string, shards, replicas int32) *cachev1alpha1.ValkeyCluster {
+	return &cachev1alpha1.ValkeyCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS},
+		Spec: cachev1alpha1.ValkeyClusterSpec{
+			Shards:           shards,
+			ReplicasPerShard: replicas,
+			Image:            "valkey/valkey:8",
+			Storage:          cachev1alpha1.StorageSpec{Size: resource.MustParse("1Gi")},
+		},
+	}
+}
+
+// markShardsReady flips every shard's StatefulSet status to fully ready, simulating
+// the pods coming up so the next reconcile proceeds past the readiness gate.
+func markShardsReady(t *testing.T, ctx context.Context, cr *cachev1alpha1.ValkeyCluster) {
+	t.Helper()
+	want := int32(1 + cr.Spec.ReplicasPerShard)
+	for i := 0; i < int(cr.Spec.Shards); i++ {
+		sts := &appsv1.StatefulSet{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: resources.StatefulSetName(cr, i), Namespace: testNS}, sts); err != nil {
+			t.Fatalf("get statefulset %d: %v", i, err)
+		}
+		sts.Status.Replicas = want
+		sts.Status.ReadyReplicas = want
+		sts.Status.CurrentReplicas = want
+		if err := k8sClient.Status().Update(ctx, sts); err != nil {
+			t.Fatalf("update statefulset %d status: %v", i, err)
 		}
 	}
+}
 
-	makeCR := func(name string, shards, replicas int32) *cachev1alpha1.ValkeyCluster {
-		return &cachev1alpha1.ValkeyCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-			Spec: cachev1alpha1.ValkeyClusterSpec{
-				Shards:           shards,
-				ReplicasPerShard: replicas,
-				Image:            "valkey/valkey:8",
-				Storage:          cachev1alpha1.StorageSpec{Size: resource.MustParse("1Gi")},
-			},
-		}
+func reconcileOnce(t *testing.T, ctx context.Context, r *ValkeyClusterReconciler, key types.NamespacedName) {
+	t.Helper()
+	if _, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
+}
 
-	markShardsReady := func(cr *cachev1alpha1.ValkeyCluster) {
-		want := int32(1 + cr.Spec.ReplicasPerShard)
-		for i := 0; i < int(cr.Spec.Shards); i++ {
-			sts := &appsv1.StatefulSet{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resources.StatefulSetName(cr, i), Namespace: ns}, sts)).To(Succeed())
-			sts.Status.Replicas = want
-			sts.Status.ReadyReplicas = want
-			sts.Status.CurrentReplicas = want
-			Expect(k8sClient.Status().Update(ctx, sts)).To(Succeed())
-		}
+func TestReconcile_ProvisionAndForm(t *testing.T) {
+	ctx := testCtx(t)
+	cr := makeCR("us1", 3, 1)
+	if err := k8sClient.Create(ctx, cr); err != nil {
+		t.Fatalf("create CR: %v", err)
 	}
+	key := types.NamespacedName{Name: cr.Name, Namespace: testNS}
+	r := newReconciler()
 
-	reconcileOnce := func(r *ValkeyClusterReconciler, key types.NamespacedName) {
-		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
-		Expect(err).NotTo(HaveOccurred())
-	}
+	t.Run("first reconcile creates owned resources and waits for pods", func(t *testing.T) {
+		reconcileOnce(t, ctx, r, key)
 
-	It("provisions and forms a cluster, reporting Ready (US1)", func() {
-		cr := makeCR("us1", 3, 1)
-		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
-		key := types.NamespacedName{Name: cr.Name, Namespace: ns}
-		r := newReconciler()
-
-		By("first reconcile creates resources and waits for pods")
-		reconcileOnce(r, key)
-
-		By("StatefulSets, headless Service, and ConfigMap exist with owner refs")
 		for i := 0; i < 3; i++ {
 			sts := &appsv1.StatefulSet{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resources.StatefulSetName(cr, i), Namespace: ns}, sts)).To(Succeed())
-			Expect(sts.OwnerReferences).NotTo(BeEmpty())
-			Expect(*sts.Spec.Replicas).To(Equal(int32(2)))
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: resources.StatefulSetName(cr, i), Namespace: testNS}, sts); err != nil {
+				t.Fatalf("get statefulset %d: %v", i, err)
+			}
+			if len(sts.OwnerReferences) == 0 {
+				t.Errorf("statefulset %d has no owner reference", i)
+			}
+			if got := *sts.Spec.Replicas; got != 2 {
+				t.Errorf("statefulset %d replicas = %d, want 2", i, got)
+			}
 		}
+
 		svc := &corev1.Service{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resources.HeadlessServiceName(cr), Namespace: ns}, svc)).To(Succeed())
-		Expect(svc.Spec.ClusterIP).To(Equal("None"))
-		cm := &corev1.ConfigMap{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resources.ConfigMapName(cr), Namespace: ns}, cm)).To(Succeed())
-		Expect(cm.Data["valkey.conf"]).To(ContainSubstring("cluster-enabled yes"))
-
-		By("phase is Provisioning until pods are ready")
-		Expect(k8sClient.Get(ctx, key, cr)).To(Succeed())
-		Expect(cr.Status.Phase).To(Equal(cachev1alpha1.PhaseProvisioning))
-
-		By("once pods are ready, the next reconcile forms the cluster")
-		markShardsReady(cr)
-		reconcileOnce(r, key)
-
-		Expect(k8sClient.Get(ctx, key, cr)).To(Succeed())
-		Expect(cr.Status.Phase).To(Equal(cachev1alpha1.PhaseReady))
-		Expect(cr.Status.ReadyShards).To(Equal(int32(3)))
-		Expect(cr.Status.Shards).To(HaveLen(3))
-		for _, ss := range cr.Status.Shards {
-			Expect(ss.PrimaryPod).NotTo(BeEmpty())
-			Expect(ss.Slots).NotTo(BeEmpty())
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: resources.HeadlessServiceName(cr), Namespace: testNS}, svc); err != nil {
+			t.Fatalf("get service: %v", err)
 		}
-		Expect(meta_IsAvailable(cr)).To(BeTrue())
+		if svc.Spec.ClusterIP != "None" {
+			t.Errorf("service ClusterIP = %q, want None (headless)", svc.Spec.ClusterIP)
+		}
+
+		cm := &corev1.ConfigMap{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: resources.ConfigMapName(cr), Namespace: testNS}, cm); err != nil {
+			t.Fatalf("get configmap: %v", err)
+		}
+		if conf := cm.Data["valkey.conf"]; !strings.Contains(conf, "cluster-enabled yes") {
+			t.Errorf("valkey.conf missing 'cluster-enabled yes':\n%s", conf)
+		}
 	})
 
-	It("scales replicas without resharding (US3)", func() {
-		cr := makeCR("rep", 3, 1)
-		Expect(k8sClient.Create(ctx, cr)).To(Succeed())
-		key := types.NamespacedName{Name: cr.Name, Namespace: ns}
-		r := newReconciler()
-		reconcileOnce(r, key)
-		markShardsReady(cr)
-		reconcileOnce(r, key)
+	t.Run("phase is Provisioning until pods are ready", func(t *testing.T) {
+		if err := k8sClient.Get(ctx, key, cr); err != nil {
+			t.Fatalf("get CR: %v", err)
+		}
+		if cr.Status.Phase != cachev1alpha1.PhaseProvisioning {
+			t.Errorf("phase = %q, want %q", cr.Status.Phase, cachev1alpha1.PhaseProvisioning)
+		}
+	})
 
-		By("increasing replicasPerShard to 2")
-		Expect(k8sClient.Get(ctx, key, cr)).To(Succeed())
+	t.Run("once pods are ready the cluster forms and reports Ready", func(t *testing.T) {
+		markShardsReady(t, ctx, cr)
+		reconcileOnce(t, ctx, r, key)
+
+		if err := k8sClient.Get(ctx, key, cr); err != nil {
+			t.Fatalf("get CR: %v", err)
+		}
+		if cr.Status.Phase != cachev1alpha1.PhaseReady {
+			t.Errorf("phase = %q, want %q", cr.Status.Phase, cachev1alpha1.PhaseReady)
+		}
+		if cr.Status.ReadyShards != 3 {
+			t.Errorf("readyShards = %d, want 3", cr.Status.ReadyShards)
+		}
+		if len(cr.Status.Shards) != 3 {
+			t.Fatalf("status shards = %d, want 3", len(cr.Status.Shards))
+		}
+		for i, ss := range cr.Status.Shards {
+			if ss.PrimaryPod == "" {
+				t.Errorf("shard %d has empty PrimaryPod", i)
+			}
+			if ss.Slots == "" {
+				t.Errorf("shard %d has empty Slots", i)
+			}
+		}
+		if !isAvailable(cr) {
+			t.Error("Available condition is not True")
+		}
+	})
+}
+
+func TestReconcile_ScaleReplicas(t *testing.T) {
+	ctx := testCtx(t)
+	cr := makeCR("rep", 3, 1)
+	if err := k8sClient.Create(ctx, cr); err != nil {
+		t.Fatalf("create CR: %v", err)
+	}
+	key := types.NamespacedName{Name: cr.Name, Namespace: testNS}
+	r := newReconciler()
+	reconcileOnce(t, ctx, r, key)
+	markShardsReady(t, ctx, cr)
+	reconcileOnce(t, ctx, r, key)
+
+	t.Run("increasing replicasPerShard to 2 scales each StatefulSet to 3 without resharding", func(t *testing.T) {
+		if err := k8sClient.Get(ctx, key, cr); err != nil {
+			t.Fatalf("get CR: %v", err)
+		}
 		cr.Spec.ReplicasPerShard = 2
-		Expect(k8sClient.Update(ctx, cr)).To(Succeed())
-		reconcileOnce(r, key) // ensures STS replicas=3, then waits for ready
-		markShardsReady(cr)
-		reconcileOnce(r, key)
+		if err := k8sClient.Update(ctx, cr); err != nil {
+			t.Fatalf("update CR: %v", err)
+		}
+		reconcileOnce(t, ctx, r, key) // sets STS replicas=3, then waits for ready
+		markShardsReady(t, ctx, cr)
+		reconcileOnce(t, ctx, r, key)
 
 		for i := 0; i < 3; i++ {
 			sts := &appsv1.StatefulSet{}
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resources.StatefulSetName(cr, i), Namespace: ns}, sts)).To(Succeed())
-			Expect(*sts.Spec.Replicas).To(Equal(int32(3)), fmt.Sprintf("shard %d", i))
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: resources.StatefulSetName(cr, i), Namespace: testNS}, sts); err != nil {
+				t.Fatalf("get statefulset %d: %v", i, err)
+			}
+			if got := *sts.Spec.Replicas; got != 3 {
+				t.Errorf("statefulset %d replicas = %d, want 3", i, got)
+			}
 		}
-		Expect(k8sClient.Get(ctx, key, cr)).To(Succeed())
-		Expect(cr.Status.Phase).To(Equal(cachev1alpha1.PhaseReady))
+		if err := k8sClient.Get(ctx, key, cr); err != nil {
+			t.Fatalf("get CR: %v", err)
+		}
+		if cr.Status.Phase != cachev1alpha1.PhaseReady {
+			t.Errorf("phase = %q, want %q", cr.Status.Phase, cachev1alpha1.PhaseReady)
+		}
 	})
-})
+}
 
-func meta_IsAvailable(cr *cachev1alpha1.ValkeyCluster) bool {
+func isAvailable(cr *cachev1alpha1.ValkeyCluster) bool {
 	for _, c := range cr.Status.Conditions {
 		if c.Type == cachev1alpha1.ConditionAvailable {
 			return c.Status == metav1.ConditionTrue
