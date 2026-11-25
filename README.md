@@ -137,3 +137,7 @@ bench/                   valkey-benchmark trade-off harness
 docs/                    day-2 operations + clustering/HA trade-offs
 specs/                   spec-kit artifacts
 ```
+
+## License
+
+Licensed under the Apache License 2.0, see [LICENSE](LICENSE).
